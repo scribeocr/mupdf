@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -64,6 +64,11 @@ int fz_pixmap_x(fz_context *ctx, const fz_pixmap *pix);
 	Return the y value of the pixmap in pixels.
 */
 int fz_pixmap_y(fz_context *ctx, const fz_pixmap *pix);
+
+/**
+	Return sizeof fz_pixmap plus size of data, in bytes.
+*/
+size_t fz_pixmap_size(fz_context *ctx, fz_pixmap *pix);
 
 /**
 	Create a new pixmap, with its origin at (0,0)
@@ -455,6 +460,21 @@ enum
 fz_pixmap *
 fz_warp_pixmap(fz_context *ctx, fz_pixmap *src, const fz_point points[4], int width, int height);
 
+/* As for fz_warp_pixmap, where width/height are automatically 'guessed'. */
+fz_pixmap *
+fz_autowarp_pixmap(fz_context *ctx, fz_pixmap *src, const fz_point points[4]);
+
+/* Search for a "document" within a pixmap (greyscale or rgb, no alpha).
+ *
+ * points should point to an array of 4 fz_points.
+ *
+ * If the function return false, no document was found.
+ * If true, points has been updated to include the corner positions of
+ * the detected document within the src image.
+ */
+int
+fz_detect_document(fz_context *ctx, fz_point *points, fz_pixmap *src);
+
 /*
 	Convert between different separation results.
 */
@@ -470,5 +490,27 @@ fz_pixmap *fz_new_pixmap_from_alpha_channel(fz_context *ctx, fz_pixmap *src);
  * Combine a pixmap without an alpha channel with a soft mask.
  */
 fz_pixmap *fz_new_pixmap_from_color_and_mask(fz_context *ctx, fz_pixmap *color, fz_pixmap *mask);
+
+/*
+ * Scale the pixmap up or down in size to fit the rectangle. Will return `NULL`
+ * if the scaling factors are out of range. This applies fancy filtering and
+ * will anti-alias the edges for subpixel positioning if using non-integer
+ * coordinates. If the clip rectangle is set, the returned pixmap may be subset
+ * to fit the clip rectangle. Pass `NULL` to the clip if you want the whole
+ * pixmap scaled.
+ */
+fz_pixmap *fz_scale_pixmap(fz_context *ctx, fz_pixmap *src, float x, float y, float w, float h, const fz_irect *clip);
+
+/*
+ * Reduces size to:
+ * tile->w => (tile->w + 2^factor-1) / 2^factor
+ * tile->h => (tile->h + 2^factor-1) / 2^factor
+ */
+void fz_subsample_pixmap(fz_context *ctx, fz_pixmap *tile, int factor);
+
+/*
+ * Copies r (clipped to both src and dest) in src to dest.
+ */
+void fz_copy_pixmap_rect(fz_context *ctx, fz_pixmap *dest, fz_pixmap *src, fz_irect r, const fz_default_colorspaces *default_cs);
 
 #endif

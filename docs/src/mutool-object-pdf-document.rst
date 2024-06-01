@@ -104,6 +104,33 @@ With :title:`MuPDF` it is also possible to create, edit and manipulate :title:`P
         var lang = pdfDocument.getLanguage();
 
 
+
+.. method:: rearrangePages(pages)
+
+    Rearrange (re-order and/or delete) pages in the `PDFDocument`.
+
+    The pages in the document will be rearranged according to the input list.
+    Any pages not listed will be removed, and pages may be duplicated by
+    listing them multiple times.
+
+    The PDF objects describing removed pages will remain in the file and take
+    up space (and can be recovered by forensic tools) unless you save with the
+    `garbage` option.
+
+    N.B. the `PDFDocument` should not be used for anything except saving after rearranging the pages (FIXME).
+
+    :arg pages: An array of page numbers (0-based).
+
+    |example_tag|
+
+    .. code-block:: javascript
+
+        var document = new Document.openDocument("my_pdf.pdf");
+        pdfDocument.rearrangePages([3,2]);
+        pdfDocument.save("fewer_pages.pdf", "garbage");
+
+
+
 .. method:: save(fileName, options)
 
     |mutool_tag|
@@ -332,7 +359,6 @@ With :title:`MuPDF` it is also possible to create, edit and manipulate :title:`P
 
 .. method:: enableJS()
 
-    |mutool_tag|
 
     Enable interpretation of document :title:`JavaScript` actions.
 
@@ -344,7 +370,6 @@ With :title:`MuPDF` it is also possible to create, edit and manipulate :title:`P
 
 .. method:: disableJS()
 
-    |mutool_tag|
 
     Disable interpretation of document :title:`JavaScript` actions.
 
@@ -356,7 +381,6 @@ With :title:`MuPDF` it is also possible to create, edit and manipulate :title:`P
 
 .. method:: isJSSupported()
 
-    |mutool_tag|
 
     Returns *true* if interpretation of document :title:`JavaScript` actions is supported.
 
@@ -391,6 +415,17 @@ With :title:`MuPDF` it is also possible to create, edit and manipulate :title:`P
                 }
         });
 
+
+.. method:: bake(bakeAnnots, bakeWidgets)
+
+    *Baking* a document changes all the annotations and/or form fields (otherwise known as widgets) in the document into static content. It "bakes" the appearance of the annotations and fields onto the page, before removing the interactive objects so they can no longer be changed.
+
+    Effectively this removes the "annotation or "widget" type of these objects, but keeps the appearance of the objects.
+
+    :arg bakeAnnots: `Boolean` Whether to bake annotations or not. Defaults to `true`.
+    :arg bakeWidgets: `Boolean` Whether to bake widgets or not. Defaults to `true`.
+
+
 ----
 
 :title:`PDF` Journalling
@@ -422,7 +457,7 @@ With :title:`MuPDF` it is also possible to create, edit and manipulate :title:`P
 
     Begin a journal operation.
 
-    :arg length: `String` The name of the operation.
+    :arg op: `String` The name of the operation.
 
 
     |example_tag|
@@ -449,11 +484,9 @@ With :title:`MuPDF` it is also possible to create, edit and manipulate :title:`P
 
     .. code-block:: javascript
 
-        pdfDocument.beginImplicitOperation();
+        pdfDocument.endOperation();
 
 .. method:: abandonOperation()
-
-    |mutool_tag|
 
     Abandon an operation. Reverts to the state before that operation began.
 
@@ -600,8 +633,6 @@ Some dictionaries in :title:`PDF` also have attached binary data. These are call
 
 .. method:: newBoolean(boolean)
 
-    |mutool_tag|
-
     Create a new boolean object.
 
     :arg boolean: The boolean value.
@@ -613,24 +644,6 @@ Some dictionaries in :title:`PDF` also have attached binary data. These are call
     .. code-block:: javascript
 
         var obj = pdfDocument.newBoolean(true);
-
-
-.. method:: newBool(boolean)
-
-    |wasm_tag|
-
-    Create a new boolean object.
-
-    :arg boolean: The boolean value.
-
-    :return: `PDFObject`.
-
-    |example_tag|
-
-    .. code-block:: javascript
-
-        var obj = pdfDocument.newBool(true);
-
 
 
 .. method:: newInteger(number)
@@ -680,7 +693,6 @@ Some dictionaries in :title:`PDF` also have attached binary data. These are call
 
 .. method:: newByteString(byteString)
 
-    |mutool_tag|
 
     Create a new byte string object.
 
@@ -860,7 +872,6 @@ All page objects are structured into a page tree, which defines the order the pa
 .. method:: addPage(mediabox, rotate, resources, contents)
 
 
-
     Create a new `PDFPage` object. Note: this function does NOT add it to the page tree, use :ref:`insertPage<mutool_insertPage>` to do that.
 
     :arg mediabox: `[ulx,uly,lrx,lry]` :ref:`Rectangle<mutool_run_js_api_rectangle>`.
@@ -869,7 +880,7 @@ All page objects are structured into a page tree, which defines the order the pa
     :arg contents: Contents string. This represents the page content stream - see section 3.7.1 in the PDF 1.7 specification.
 
 
-    :return: `PDFPage`.
+    :return: `PDFObject`.
 
 
     |example_tag|
@@ -886,12 +897,12 @@ All page objects are structured into a page tree, which defines the order the pa
         fonts.put("Helv", helvetica);
         var resources = pdfDocument.addObject(pdfDocument.newDictionary());
         resources.put("Font", fonts);
-        var blankPage = pdfDocument.addPage([0,0,300,350], 0, resources, "BT /Helv 12 Tf 100 100 Td (MuPDF!)Tj ET");
+        var pageObject = pdfDocument.addPage([0,0,300,350], 0, resources, "BT /Helv 12 Tf 100 100 Td (MuPDF!)Tj ET");
+        pdfDocument.insertPage(-1, pageObject);
 
 
     |example_tag|
 
-    |mutool_tag|
 
     .. literalinclude:: ../examples/pdf-create.js
        :caption: docs/examples/pdf-create.js
@@ -997,8 +1008,6 @@ The following functions can be used to copy objects from one :title:`PDF` docume
 
 .. method:: newGraftMap()
 
-    |mutool_tag|
-
     Create a graft map on the destination document, so that objects that have already been copied can be found again. Each graft map should only be used with one source document. Make sure to create a new graft map for each source document used.
 
     :return: `PDFGraftMap`.
@@ -1012,8 +1021,6 @@ The following functions can be used to copy objects from one :title:`PDF` docume
 
 .. method:: graftObject(object)
 
-    |mutool_tag|
-
     Deep copy an object into the destination document. This function will not remember previously copied objects. If you are copying several objects from the same source document using multiple calls, you should use a graft map instead.
 
     :arg object: Object to graft.
@@ -1025,21 +1032,21 @@ The following functions can be used to copy objects from one :title:`PDF` docume
         pdfDocument.graftObject(obj);
 
 
-.. method:: graftPage(dstDoc, dstPageNumber, srcDoc, srcPageNumber)
-
-    |mutool_tag|
+.. method:: graftPage(to, srcDoc, srcPageNumber)
 
     Graft a page and its resources at the given page number from the source document to the requested page number in the document.
 
-    :arg dstPageNumber: The page number where the source page will be inserted. Page numbers start at `0`, and `-1` means at the end of the document.
+    :arg to: The page number to insert the page before. Page numbers start at `0` and `-1` means at the end of the document.
     :arg srcDoc: Source document.
     :arg srcPageNumber: Source page number.
 
     |example_tag|
 
+    This would copy the first page of the source document (`0`) to the last page (-1) of the current PDF document.
+
     .. code-block:: javascript
 
-        pdfDocument.graftObject(-1, srcdoc, 0);
+        pdfDocument.graftPage(-1, srcDoc, 0);
 
 
 ----

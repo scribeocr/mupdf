@@ -18,11 +18,16 @@ include Makethird
 
 # --- Configuration ---
 
-# Do not specify CFLAGS or LIBS on the make invocation line - specify
-# XCFLAGS or XLIBS instead. Make ignores any lines in the makefile that
-# set a variable that was set on the command line.
+# Do not specify CFLAGS, LDFLAGS, LIB_LDFLAGS, EXE_LDFLAGS or LIBS on the make
+# invocation line - specify XCFLAGS, XLDFLAGS, XLIB_LDFLAGS, XEXE_LDFLAGS or
+# XLIBS instead. Make ignores any lines in the makefile that set a variable
+# that was set on the command line.
 CFLAGS += $(XCFLAGS) -Iinclude
 LIBS += $(XLIBS) -lm
+
+LDFLAGS += $(XLDFLAGS)
+LIB_LDFLAGS += $(XLIB_LDFLAGS)
+EXE_LDFLAGS += $(XEXE_LDFLAGS)
 
 ifneq ($(threading),no)
   ifeq ($(HAVE_PTHREAD),yes)
@@ -41,7 +46,12 @@ VERSION_MINOR = $(shell grep "define FZ_VERSION_MINOR" include/mupdf/fitz/versio
 VERSION_PATCH = $(shell grep "define FZ_VERSION_PATCH" include/mupdf/fitz/version.h | cut -d ' ' -f 3)
 
 ifeq ($(LINUX_OR_OPENBSD),yes)
-  SO_VERSION = .$(VERSION_MINOR).$(VERSION_PATCH)
+  ifneq ($(USE_SONAME),no)
+    SO_VERSION = .$(VERSION_MINOR).$(VERSION_PATCH)
+    ifeq ($(OS),Linux)
+      SO_VERSION_LINUX := yes
+    endif
+  endif
 endif
 
 # --- Commands ---
@@ -93,9 +103,11 @@ $(OUT)/%.exe: %.c
 	$(LINK_CMD)
 
 $(OUT)/%.$(SO)$(SO_VERSION):
-	$(LINK_CMD) $(LIB_LDFLAGS) $(THIRD_LIBS) $(LIBCRYPTO_LIBS)
-ifneq ($(SO_VERSION),)
+ifeq ($(SO_VERSION_LINUX),yes)
+	$(LINK_CMD) -Wl,-soname,$(notdir $@) $(LIB_LDFLAGS) $(THIRD_LIBS) $(LIBCRYPTO_LIBS)
 	ln -sf $(notdir $@) $(patsubst %$(SO_VERSION), %, $@)
+else
+	$(LINK_CMD) $(LIB_LDFLAGS) $(THIRD_LIBS) $(LIBCRYPTO_LIBS)
 endif
 
 $(OUT)/%.def: $(OUT)/%.$(SO)$(SO_VERSION)
@@ -449,6 +461,7 @@ incdir ?= $(prefix)/include
 mandir ?= $(prefix)/share/man
 docdir ?= $(prefix)/share/doc/mupdf
 pydir ?= $(shell python3 -c "import sysconfig; print(sysconfig.get_path('platlib'))")
+SO_INSTALL_MODE ?= 644
 
 third: $(THIRD_LIB)
 extra-libs: $(THIRD_GLUT_LIB)
@@ -480,7 +493,8 @@ install-docs:
 
 	install -d $(DESTDIR)$(docdir)
 	install -d $(DESTDIR)$(docdir)/examples
-	install -m 644 README COPYING CHANGES $(DESTDIR)$(docdir)
+	install -m 644 README CHANGES $(DESTDIR)$(docdir)
+	install -m 644 $(wildcard COPYING LICENSE) $(DESTDIR)$(docdir)
 	install -m 644 docs/examples/* $(DESTDIR)$(docdir)/examples
 
 install: install-libs install-apps install-docs
@@ -517,9 +531,6 @@ watch:
 
 watch-recompile:
 	@ while ! inotifywait -q -e modify $(WATCH_SRCS) ; do time -p $(MAKE) ; done
-
-wasm:
-	$(MAKE) -C platform/wasm
 
 java:
 	$(MAKE) -C platform/java build=$(build)
@@ -609,13 +620,17 @@ $(error OUT=$(OUT) does not contain shared)
 endif
 
 # C++, Python and C# shared libraries.
+#
+# To disable automatic use of a venv, use `make VENV_FLAG= ...` or `VENV_FLAG=
+# make ...`.
+#
+VENV_FLAG ?= --venv
 c++-%: shared-%
-	./scripts/mupdfwrap.py --venv -d $(OUT) -b 01
+	./scripts/mupdfwrap.py $(VENV_FLAG) -d $(OUT) -b 01
 python-%: c++-%
-	./scripts/mupdfwrap.py --venv -d $(OUT) -b 23
+	./scripts/mupdfwrap.py $(VENV_FLAG) -d $(OUT) -b 23
 csharp-%: c++-%
-	./scripts/mupdfwrap.py --venv -d $(OUT) -b --csharp 23
-
+	./scripts/mupdfwrap.py $(VENV_FLAG) -d $(OUT) -b --csharp 23
 
 # Installs of C, C++, Python and C# shared libraries
 #
@@ -629,21 +644,21 @@ endif
 
 install-shared-c: install-shared-check shared install-headers
 	install -d $(DESTDIR)$(libdir)
-	install -m 644 $(OUT)/libmupdf.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
+	install -m $(SO_INSTALL_MODE) $(OUT)/libmupdf.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
 ifneq ($(OS),OpenBSD)
-	ln -s libmupdf.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/libmupdf.$(SO)
+	ln -sf libmupdf.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/libmupdf.$(SO)
 endif
 
 install-shared-c++: install-shared-c c++
 	install -m 644 platform/c++/include/mupdf/*.h $(DESTDIR)$(incdir)/mupdf
-	install -m 644 $(OUT)/libmupdfcpp.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
+	install -m $(SO_INSTALL_MODE) $(OUT)/libmupdfcpp.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
 ifneq ($(OS),OpenBSD)
-	ln -s libmupdfcpp.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/libmupdfcpp.$(SO)
+	ln -sf libmupdfcpp.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/libmupdfcpp.$(SO)
 endif
 
 install-shared-python: install-shared-c++ python
 	install -d $(DESTDIR)$(pydir)/mupdf
-	install -m 644 $(OUT)/_mupdf.$(SO) $(DESTDIR)$(pydir)/mupdf
+	install -m $(SO_INSTALL_MODE) $(OUT)/_mupdf.$(SO) $(DESTDIR)$(pydir)/mupdf
 	install -m 644 $(OUT)/mupdf.py $(DESTDIR)$(pydir)/mupdf/__init__.py
 
 else

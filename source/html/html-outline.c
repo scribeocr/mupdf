@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -207,10 +207,11 @@ fz_find_html_target(fz_context *ctx, fz_html *html, const char *id)
 }
 
 static fz_html_flow *
-make_flow_bookmark(fz_context *ctx, fz_html_flow *flow, float y)
+make_flow_bookmark(fz_context *ctx, fz_html_flow *flow, float y, fz_html_flow **candidate)
 {
 	while (flow)
 	{
+		*candidate = flow;
 		if (flow->y >= y)
 			return flow;
 		flow = flow->next;
@@ -219,35 +220,40 @@ make_flow_bookmark(fz_context *ctx, fz_html_flow *flow, float y)
 }
 
 static fz_html_flow *
-make_box_bookmark(fz_context *ctx, fz_html_box *box, float y)
+make_box_bookmark(fz_context *ctx, fz_html_box *box, float y, fz_html_flow **candidate)
 {
 	fz_html_flow *mark;
+	fz_html_flow *dummy = NULL;
+	if (candidate == NULL)
+		candidate = &dummy;
 	while (box)
 	{
 		if (box->type == BOX_FLOW)
 		{
 			if (box->s.layout.y >= y)
 			{
-				mark = make_flow_bookmark(ctx, box->u.flow.head, y);
+				mark = make_flow_bookmark(ctx, box->u.flow.head, y, candidate);
 				if (mark)
 					return mark;
 			}
+			else
+				*candidate = make_flow_bookmark(ctx, box->u.flow.head, y, candidate);
 		}
 		else
 		{
-			mark = make_box_bookmark(ctx, box->down, y);
+			mark = make_box_bookmark(ctx, box->down, y, candidate);
 			if (mark)
 				return mark;
 		}
 		box = box->next;
 	}
-	return NULL;
+	return *candidate;
 }
 
 fz_bookmark
 fz_make_html_bookmark(fz_context *ctx, fz_html *html, int page)
 {
-	return (fz_bookmark)make_box_bookmark(ctx, html->tree.root, page * html->page_h);
+	return (fz_bookmark)make_box_bookmark(ctx, html->tree.root, page * html->page_h, NULL);
 }
 
 static int
@@ -375,7 +381,7 @@ add_html_outline(fz_context *ctx, struct outline_parser *x, fz_html_box *box)
 		fz_rethrow(ctx);
 	}
 
-	heading = fz_html_heading_from_struct(box->structure);
+	heading = box->heading;
 	if (x->level[x->current] < heading && x->current < 5)
 	{
 		x->tail[x->current+1] = x->down[x->current];
@@ -400,7 +406,7 @@ load_html_outline(fz_context *ctx, struct outline_parser *x, fz_html_box *box)
 {
 	while (box)
 	{
-		int heading = fz_html_heading_from_struct(box->structure);
+		int heading = box->heading;
 		if (heading)
 			add_html_outline(ctx, x, box);
 		if (box->down)

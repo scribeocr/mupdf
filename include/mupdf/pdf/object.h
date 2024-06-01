@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -127,6 +127,7 @@ typedef struct
 
 int pdf_mark_list_push(fz_context *ctx, pdf_mark_list *list, pdf_obj *obj);
 void pdf_mark_list_pop(fz_context *ctx, pdf_mark_list *list);
+int pdf_mark_list_check(fz_context *ctx, pdf_mark_list *list, pdf_obj *obj);
 void pdf_mark_list_init(fz_context *ctx, pdf_mark_list *list);
 void pdf_mark_list_free(fz_context *ctx, pdf_mark_list *list);
 
@@ -211,6 +212,7 @@ float pdf_dict_get_real(fz_context *ctx, pdf_obj *dict, pdf_obj *key);
 const char *pdf_dict_get_name(fz_context *ctx, pdf_obj *dict, pdf_obj *key);
 const char *pdf_dict_get_string(fz_context *ctx, pdf_obj *dict, pdf_obj *key, size_t *sizep);
 const char *pdf_dict_get_text_string(fz_context *ctx, pdf_obj *dict, pdf_obj *key);
+const char *pdf_dict_get_text_string_opt(fz_context *ctx, pdf_obj *dict, pdf_obj *key);
 fz_rect pdf_dict_get_rect(fz_context *ctx, pdf_obj *dict, pdf_obj *key);
 fz_matrix pdf_dict_get_matrix(fz_context *ctx, pdf_obj *dict, pdf_obj *key);
 int64_t pdf_dict_get_date(fz_context *ctx, pdf_obj *dict, pdf_obj *key);
@@ -265,7 +267,7 @@ int pdf_obj_parent_num(fz_context *ctx, pdf_obj *obj);
 
 char *pdf_sprint_obj(fz_context *ctx, char *buf, size_t cap, size_t *len, pdf_obj *obj, int tight, int ascii);
 void pdf_print_obj(fz_context *ctx, fz_output *out, pdf_obj *obj, int tight, int ascii);
-void pdf_print_encrypted_obj(fz_context *ctx, fz_output *out, pdf_obj *obj, int tight, int ascii, pdf_crypt *crypt, int num, int gen);
+void pdf_print_encrypted_obj(fz_context *ctx, fz_output *out, pdf_obj *obj, int tight, int ascii, pdf_crypt *crypt, int num, int gen, int *sep);
 
 void pdf_debug_obj(fz_context *ctx, pdf_obj *obj);
 void pdf_debug_ref(fz_context *ctx, pdf_obj *obj);

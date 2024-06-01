@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -57,7 +57,7 @@ fz_xml *fz_parse_xml_stream(fz_context *ctx, fz_stream *stream, int preserve_whi
 
 	preserve_white: whether to keep or delete all-whitespace nodes.
 */
-fz_xml *fz_parse_xml_archive_entry(fz_context *ctx, fz_archive *arch, const char *filename, int preserve_white);
+fz_xml *fz_parse_xml_archive_entry(fz_context *ctx, fz_archive *dir, const char *filename, int preserve_white);
 
 /**
 	Try and parse the contents of an archive entry into a tree of xml nodes.
@@ -67,7 +67,7 @@ fz_xml *fz_parse_xml_archive_entry(fz_context *ctx, fz_archive *arch, const char
 	Will return NULL if the archive entry can't be found. Otherwise behaves
 	the same as fz_parse_xml_archive_entry. May throw exceptions.
 */
-fz_xml *fz_try_parse_xml_archive_entry(fz_context *ctx, fz_archive *arch, const char *filename, int preserve_white);
+fz_xml *fz_try_parse_xml_archive_entry(fz_context *ctx, fz_archive *dir, const char *filename, int preserve_white);
 
 /**
 	Parse the contents of a buffer into a tree of XML nodes,
@@ -393,5 +393,43 @@ const char *fz_dom_attribute(fz_context *ctx, fz_xml *elt, const char *att);
 	value will be a borrowed pointer to the value.
 */
 const char *fz_dom_get_attribute(fz_context *ctx, fz_xml *elt, int i, const char **att);
+
+/**
+	Make new xml dom root element.
+*/
+fz_xml *fz_new_dom(fz_context *ctx, const char *tag);
+
+/**
+	Create a new dom node.
+
+	This will NOT be linked in yet.
+*/
+fz_xml *fz_new_dom_node(fz_context *ctx, fz_xml *dom, const char *tag);
+
+/**
+	Create a new dom text node.
+
+	This will NOT be linked in yet.
+*/
+fz_xml *fz_new_dom_text_node(fz_context *ctx, fz_xml *dom, const char *text);
+
+/**
+	Write our xml structure out to an xml stream.
+
+	Properly formatted XML is only allowed to have a single top-level node
+	under which everything must sit. Our structures allow for multiple
+	top level nodes. If required, we will output an extra 'ROOT' node
+	at the top so that the xml is well-formed.
+
+	If 'indented' is non-zero then additional whitespace will be added to
+	make the XML easier to read in a text editor. It will NOT be properly
+	compliant.
+*/
+void fz_write_xml(fz_context *ctx, fz_xml *root, fz_output *out, int indented);
+
+/**
+	As for fz_write_xml, but direct to a file.
+*/
+void fz_save_xml(fz_context *ctx, fz_xml *root, const char *path, int indented);
 
 #endif

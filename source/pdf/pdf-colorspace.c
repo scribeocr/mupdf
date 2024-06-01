@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -50,7 +50,7 @@ load_icc_based(fz_context *ctx, pdf_obj *dict, int allow_alt, pdf_cycle_list *cy
 			fz_catch(ctx)
 			{
 				fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
-				fz_rethrow_if(ctx, FZ_ERROR_MEMORY);
+				fz_rethrow_if(ctx, FZ_ERROR_SYSTEM);
 				fz_report_error(ctx);
 				fz_warn(ctx, "ignoring broken ICC Alternate colorspace");
 			}
@@ -80,8 +80,11 @@ load_icc_based(fz_context *ctx, pdf_obj *dict, int allow_alt, pdf_cycle_list *cy
 			fz_drop_buffer(ctx, buf);
 		fz_catch(ctx)
 		{
-			fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
-			fz_rethrow_if(ctx, FZ_ERROR_MEMORY);
+			if (fz_caught(ctx) == FZ_ERROR_TRYLATER || fz_caught(ctx) == FZ_ERROR_SYSTEM)
+			{
+				fz_drop_colorspace(ctx, alt);
+				fz_rethrow(ctx);
+			}
 			fz_report_error(ctx);
 			fz_warn(ctx, "ignoring broken ICC profile");
 		}
@@ -367,7 +370,7 @@ pdf_load_colorspace_imp(fz_context *ctx, pdf_obj *obj, pdf_cycle_list *cycle_up)
 	pdf_cycle_list cycle;
 
 	if (pdf_cycle(ctx, &cycle, cycle_up, obj))
-			fz_throw(ctx, FZ_ERROR_SYNTAX, "recursive colorspace");
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "recursive colorspace");
 
 	if (pdf_is_name(ctx, obj))
 	{
@@ -507,7 +510,7 @@ pdf_load_output_intent(fz_context *ctx, pdf_document *doc)
 	fz_catch(ctx)
 	{
 		fz_rethrow_if(ctx, FZ_ERROR_TRYLATER);
-		fz_rethrow_if(ctx, FZ_ERROR_MEMORY);
+		fz_rethrow_if(ctx, FZ_ERROR_SYSTEM);
 		fz_report_error(ctx);
 		fz_warn(ctx, "Attempt to read Output Intent failed");
 	}

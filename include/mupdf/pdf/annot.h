@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -111,6 +111,26 @@ enum
 	PDF_ANNOT_Q_CENTER = 1,
 	PDF_ANNOT_Q_RIGHT = 2
 };
+
+enum pdf_intent
+{
+	PDF_ANNOT_IT_DEFAULT = 0,
+	PDF_ANNOT_IT_FREETEXT_CALLOUT,
+	PDF_ANNOT_IT_FREETEXT_TYPEWRITER,
+	PDF_ANNOT_IT_LINE_ARROW,
+	PDF_ANNOT_IT_LINE_DIMENSION,
+	PDF_ANNOT_IT_POLYLINE_DIMENSION,
+	PDF_ANNOT_IT_POLYGON_CLOUD,
+	PDF_ANNOT_IT_POLYGON_DIMENSION,
+	PDF_ANNOT_IT_STAMP_IMAGE,
+	PDF_ANNOT_IT_STAMP_SNAPSHOT,
+	PDF_ANNOT_IT_UNKNOWN = 255,
+};
+
+const char *pdf_string_from_intent(fz_context *ctx, enum pdf_intent intent);
+pdf_obj *pdf_name_from_intent(fz_context *ctx, enum pdf_intent intent);
+enum pdf_intent pdf_intent_from_string(fz_context *ctx, const char *str);
+enum pdf_intent pdf_intent_from_name(fz_context *ctx, pdf_obj *obj);
 
 /*
 	Map from a PDF name specifying an annotation line ending
@@ -429,6 +449,10 @@ int pdf_annot_has_interior_color(fz_context *ctx, pdf_annot *annot);
 int pdf_annot_has_line_ending_styles(fz_context *ctx, pdf_annot *annot);
 
 /*
+	Check to see if an annotation has quadding.
+*/
+int pdf_annot_has_quadding(fz_context *ctx, pdf_annot *annot);
+/*
 	Check to see if an annotation has a border.
 */
 int pdf_annot_has_border(fz_context *ctx, pdf_annot *annot);
@@ -449,6 +473,11 @@ int pdf_annot_has_icon_name(fz_context *ctx, pdf_annot *annot);
 int pdf_annot_has_open(fz_context *ctx, pdf_annot *annot);
 
 /*
+	Check to see if an annotation has a popup annotation.
+*/
+int pdf_annot_has_popup(fz_context *ctx, pdf_annot *annot);
+
+/*
 	Check to see if an annotation has author data.
 */
 int pdf_annot_has_author(fz_context *ctx, pdf_annot *annot);
@@ -465,6 +494,7 @@ fz_rect pdf_annot_rect(fz_context *ctx, pdf_annot *annot);
 
 /*
 	Retrieve the annotation border line width in points.
+	DEPRECATED: Use pdf_annot_border_width instead.
 */
 float pdf_annot_border(fz_context *ctx, pdf_annot *annot);
 
@@ -577,7 +607,8 @@ void pdf_set_annot_stamp_image(fz_context *ctx, pdf_annot *annot, fz_image *imag
 void pdf_set_annot_rect(fz_context *ctx, pdf_annot *annot, fz_rect rect);
 
 /*
-	Set the border width for an annotation, in points and remove any border effect.
+	Set the border width for an annotation, in points.
+	DEPRECATED: Use pdf_set_annot_border_width instead.
 */
 void pdf_set_annot_border(fz_context *ctx, pdf_annot *annot, float width);
 
@@ -732,6 +763,10 @@ int64_t pdf_annot_modification_date(fz_context *ctx, pdf_annot *annot);
 void pdf_set_annot_modification_date(fz_context *ctx, pdf_annot *annot, int64_t time);
 int64_t pdf_annot_creation_date(fz_context *ctx, pdf_annot *annot);
 void pdf_set_annot_creation_date(fz_context *ctx, pdf_annot *annot, int64_t time);
+
+int pdf_annot_has_intent(fz_context *ctx, pdf_annot *annot);
+enum pdf_intent pdf_annot_intent(fz_context *ctx, pdf_annot *annot);
+void pdf_set_annot_intent(fz_context *ctx, pdf_annot *annot, enum pdf_intent it);
 
 void pdf_parse_default_appearance(fz_context *ctx, const char *da, const char **font, float *size, int *n, float color[4]);
 void pdf_print_default_appearance(fz_context *ctx, char *buf, int nbuf, const char *font, float size, int n, const float *color);

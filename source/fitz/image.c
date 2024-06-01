@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -1065,7 +1065,7 @@ fz_get_pixmap_from_image(fz_context *ctx, fz_image *image, const fz_irect *subar
 	fz_catch(ctx)
 	{
 		/* Do nothing */
-		fz_rethrow_if(ctx, FZ_ERROR_MEMORY);
+		fz_rethrow_if(ctx, FZ_ERROR_SYSTEM);
 		fz_report_error(ctx);
 	}
 
@@ -1116,8 +1116,8 @@ fz_new_image_from_pixmap(fz_context *ctx, fz_pixmap *pixmap, fz_image *mask)
 
 fz_image *
 fz_new_image_of_size(fz_context *ctx, int w, int h, int bpc, fz_colorspace *colorspace,
-		int xres, int yres, int interpolate, int imagemask, float *decode,
-		int *colorkey, fz_image *mask, size_t size,
+		int xres, int yres, int interpolate, int imagemask, const float *decode,
+		const int *colorkey, fz_image *mask, size_t size,
 		fz_image_get_pixmap_fn *get_pixmap,
 		fz_image_get_size_fn *get_size,
 		fz_drop_image_fn *drop)
@@ -1198,8 +1198,8 @@ compressed_image_get_size(fz_context *ctx, fz_image *image)
 fz_image *
 fz_new_image_from_compressed_buffer(fz_context *ctx, int w, int h,
 	int bpc, fz_colorspace *colorspace,
-	int xres, int yres, int interpolate, int imagemask, float *decode,
-	int *colorkey, fz_compressed_buffer *buffer, fz_image *mask)
+	int xres, int yres, int interpolate, int imagemask, const float *decode,
+	const int *colorkey, fz_compressed_buffer *buffer, fz_image *mask)
 {
 	fz_compressed_image *image;
 
@@ -1345,7 +1345,7 @@ fz_new_image_from_buffer(fz_context *ctx, fz_buffer *buffer)
 	uint8_t orientation = 0;
 
 	if (len < 8)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "unknown image file format");
+		fz_throw(ctx, FZ_ERROR_FORMAT, "unknown image file format");
 
 	type = fz_recognize_image_format(ctx, buf);
 	bpc = 8;
@@ -1383,12 +1383,12 @@ fz_new_image_from_buffer(fz_context *ctx, fz_buffer *buffer)
 		bpc = 1;
 		break;
 	default:
-		fz_throw(ctx, FZ_ERROR_GENERIC, "unknown image file format");
+		fz_throw(ctx, FZ_ERROR_FORMAT, "unknown image file format");
 	}
 
 	fz_try(ctx)
 	{
-		bc = fz_malloc_struct(ctx, fz_compressed_buffer);
+		bc = fz_new_compressed_buffer(ctx);
 		bc->buffer = fz_keep_buffer(ctx, buffer);
 		bc->params.type = type;
 		if (type == FZ_IMAGE_JPEG)

@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -249,7 +249,7 @@ static int walk_string(string_walker *walker)
 		walker->scale = face->units_per_EM;
 		fterr = FT_Set_Char_Size(face, walker->scale, walker->scale, 72, 72);
 		if (fterr)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "freetype setting character size: %s", ft_error_string(fterr));
+			fz_throw(ctx, FZ_ERROR_LIBRARY, "freetype setting character size: %s", ft_error_string(fterr));
 
 		hb_buffer_clear_contents(walker->hb_buf);
 		hb_buffer_set_direction(walker->hb_buf, walker->rtl ? HB_DIRECTION_RTL : HB_DIRECTION_LTR);
@@ -328,27 +328,6 @@ static const char *get_node_text(fz_context *ctx, fz_html_flow *node)
 		return "-";
 	else
 		return "";
-}
-
-int fz_html_heading_from_struct(int structure)
-{
-	switch (structure)
-	{
-	case FZ_HTML_STRUCT_H1:
-		return 1;
-	case FZ_HTML_STRUCT_H2:
-		return 2;
-	case FZ_HTML_STRUCT_H3:
-		return 3;
-	case FZ_HTML_STRUCT_H4:
-		return 4;
-	case FZ_HTML_STRUCT_H5:
-		return 5;
-	case FZ_HTML_STRUCT_H6:
-		return 6;
-	default:
-		return 0;
-	}
 }
 
 static void measure_string_w(fz_context *ctx, fz_html_flow *node, hb_buffer_t *hb_buf)
@@ -511,14 +490,11 @@ static void layout_line(fz_context *ctx, float indent, float page_w, float line_
 		{
 		default:
 		case VA_BASELINE:
-			va = 0;
-			break;
 		case VA_SUB:
-			va = node->box->s.layout.em * 0.2f;
-			break;
 		case VA_SUPER:
-			va = node->box->s.layout.em * -0.3f;
+			va = node->box->s.layout.baseline;
 			break;
+
 		case VA_TOP:
 		case VA_TEXT_TOP:
 			va = -baseline + node->box->s.layout.em * 0.8f;
@@ -574,6 +550,7 @@ static int flush_line(fz_context *ctx, fz_html_box *box, layout_data *ld, float 
 					restart->end = box;
 					restart->end_flow = a;
 				}
+				restart->reason = FZ_HTML_RESTART_REASON_LINE_HEIGHT;
 				return 1;
 			}
 			box->s.layout.b += avail;
@@ -654,7 +631,7 @@ static void layout_flow(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_h
 	int align;
 	fz_html_restarter *restart = ld->restart;
 
-	float em = box->s.layout.em = fz_from_css_number(box->style->font_size, top->s.layout.em, top->s.layout.em, top->s.layout.em);
+	float em = box->s.layout.em;
 	indent = box->is_first_flow ? fz_from_css_number(top->style->text_indent, em, top->s.layout.w, 0) : 0;
 	align = top->style->text_align;
 
@@ -679,7 +656,37 @@ static void layout_flow(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_h
 			return;
 		/* We match! Remember where we should start. */
 		restart->start = NULL;
-		start_flow = restart->start_flow;
+
+#ifdef DEBUG_LAYOUT_RESTARTING
+		/* Output us some crufty debug */
+		if(restart->start_flow == NULL)
+			printf("<restart>");
+		for (node = box->u.flow.head; node; node = node->next)
+		{
+			if(restart->start_flow == node)
+				printf("<restart>");
+			switch (node->type)
+			{
+			case FLOW_WORD:
+				printf("[%s]", node->content.text);
+				break;
+			case FLOW_BREAK:
+			case FLOW_SBREAK:
+				printf("\n");
+				break;
+			case FLOW_SPACE:
+				printf(" ");
+				break;
+			case FLOW_SHYPHEN:
+				printf("-");
+				break;
+			default:
+				printf("?");
+				break;
+			}
+		}
+		printf("\n");
+#endif
 	}
 
 	/* If we have nothing to flow, nothing to do. */
@@ -687,17 +694,23 @@ static void layout_flow(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_h
 		return;
 
 	/* Measure the size of all the words and images in the flow. */
-	for (node = box->u.flow.head; node; node = node->next)
+	node = box->u.flow.head;
+
+	/* First, if we are restarting, skip over ones we've done already. */
+	if (restart && restart->start_flow)
 	{
-		if (restart && restart->start_flow)
+		while(node && node != restart->start_flow)
 		{
-			if (restart->start_flow != node)
-			{
-				indent = 0;
-				continue;
-			}
-			restart->start_flow = NULL;
+			indent = 0;
+			node = node->next;
 		}
+		start_flow = node;
+		restart->start_flow = NULL;
+	}
+
+	/* Now measure the size of the remaining nodes. */
+	for (; node; node = node->next)
+	{
 		node->breaks_line = 0; /* reset line breaks from previous layout */
 
 		if (node->type == FLOW_IMAGE)
@@ -743,32 +756,23 @@ static void layout_flow(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_h
 	node = box->u.flow.head;
 	if (start_flow)
 	{
-		line = start_flow;
 		line_w = start_flow == node ? indent : 0;
+		node = start_flow;
 	}
 	else
 	{
-		line = node;
 		line_w = indent;
 	}
+	line = node;
 
 	candidate = NULL;
 	candidate_w = 0;
 	desperate = NULL;
 	desperate_w = 0;
 
+	/* Now collate the measured nodes into a line. */
 	while (node)
 	{
-		/* Fast-forward to the restart point. */
-		if (start_flow)
-		{
-			if (start_flow != node)
-			{
-				node = node->next;
-				continue;
-			}
-			start_flow = NULL;
-		}
 
 		switch (node->type)
 		{
@@ -816,8 +820,9 @@ static void layout_flow(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_h
 			break;
 		}
 
-		/* The current node either does not fit or we saw a hard break. */
-		/* Break the line if we have a candidate break point. */
+		/* If we see a hard break...
+		 * or the line doesn't fit, and we have a candidate breakpoint...
+		 * then we can flush the line so far. */
 		if (node->type == FLOW_BREAK || (line_w > box->s.layout.w && (candidate || desperate)))
 		{
 			int line_align = align;
@@ -849,6 +854,17 @@ static void layout_flow(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_h
 			desperate_w = 0;
 			indent = 0;
 			line_w = 0;
+		}
+		else if (restart && (restart->flags & FZ_HTML_RESTARTER_FLAGS_NO_OVERFLOW) && line_w > box->s.layout.w)
+		{
+			/* We are in 'no-overflow' mode, and the line doesn't fit.
+			 * This means our first box is too wide to ever fit in a box of this width. */
+			assert(restart->start == NULL);
+
+			restart->end = box;
+			restart->end_flow = start_flow;
+			restart->reason = FZ_HTML_RESTART_REASON_LINE_WIDTH;
+			return;
 		}
 		else
 		{
@@ -999,6 +1015,17 @@ static float largest_max_width(fz_context *ctx, fz_html_box *box)
 	return r_max;
 }
 
+static void squish_block(fz_context *ctx, fz_html_box *box)
+{
+	fz_html_box *child;
+
+	box->s.layout.b = box->s.layout.y;
+	if (box->type == BOX_FLOW)
+		return;
+	for (child = box->down; child; child = child->next)
+		squish_block(ctx, child);
+}
+
 static void layout_table_row(fz_context *ctx, layout_data *ld, fz_html_box *row, int ncol, struct column_width *colw, float spacing)
 {
 	fz_html_box *cell, *child;
@@ -1100,7 +1127,11 @@ static void layout_table(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_
 	}
 
 	/* TODO: remove 'vertical' margin adjustments across automatic page breaks */
-	if (layout_block_page_break(ctx, ld, &top->s.layout.b, box->style->page_break_before))
+	if (restart && restart->start != NULL)
+	{
+		/* We're still skipping, don't check for pagebreak before! */
+	}
+	else if (layout_block_page_break(ctx, ld, &top->s.layout.b, box->style->page_break_before))
 		eop = 1;
 
 	/* Position table in box flow, and add margins and padding */
@@ -1226,19 +1257,23 @@ static void layout_table(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_
 			row->s.layout.x = box->s.layout.x;
 			row->s.layout.w = box->s.layout.w;
 			row->s.layout.y = row->s.layout.b = box->s.layout.b;
+			row->s.layout.b = row->s.layout.y;
 
 			if (restart && restart->start != NULL)
 			{
 				if (restart->start == row)
 					restart->start = NULL;
 				else
+				{
+					squish_block(ctx, row);
 					continue; /* still skipping */
+				}
 			}
 
 			layout_table_row(ctx, ld, row, ncol, colw, spacing);
 
 			/* If the row doesn't fit on the current page, break here and put the row on the next page.
-			 * Unless the row was at the very start of the page, in which case it'll overfloaw instead.
+			 * Unless the row was at the very start of the page, in which case it'll overflow instead.
 			 * FIXME: Don't overflow, draw twice with offset to break it abruptly at the page border!
 			 */
 			if (ld->page_h > 0)
@@ -1268,6 +1303,22 @@ static void layout_table(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_
 		fz_free(ctx, colw);
 	fz_catch(ctx)
 		fz_rethrow(ctx);
+
+	if (restart && restart->start != NULL)
+	{
+		/* We're still skipping, don't check for pagebreak after! */
+	}
+	else if (layout_block_page_break(ctx, ld, &top->s.layout.b, box->style->page_break_after))
+	{
+		if (restart && restart->end == NULL)
+		{
+			if (restart->potential)
+				restart->end = restart->potential;
+			else
+				restart->end = box;
+			return;
+		}
+	}
 }
 
 /* === LAYOUT BLOCKS === */
@@ -1315,7 +1366,11 @@ static void layout_block(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_
 	}
 
 	/* TODO: remove 'vertical' margin adjustments across automatic page breaks */
-	if (layout_block_page_break(ctx, ld, &top->s.layout.b, style->page_break_before))
+	if (restart && restart->start != NULL)
+	{
+		/* We're still skipping, don't check for pagebreak before! */
+	}
+	else if (layout_block_page_break(ctx, ld, &top->s.layout.b, style->page_break_before))
 		eop = 1;
 
 	/* Important to remember that box->{x,y,w,b} are the coordinates of the content. The
@@ -1416,7 +1471,21 @@ static void layout_block(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_
 		box->s.layout.b += fz_from_css_number_scale(style->line_height, em);
 	}
 
-	(void) layout_block_page_break(ctx, ld, &box->s.layout.b, style->page_break_after);
+	if (restart && restart->start != NULL)
+	{
+		/* We're still skipping, don't check for pagebreak after! */
+	}
+	else if (layout_block_page_break(ctx, ld, &box->s.layout.b, style->page_break_after))
+	{
+		if (restart && restart->end == NULL)
+		{
+			if (restart->potential)
+				restart->end = restart->potential;
+			else
+				restart->end = box;
+			return;
+		}
+	}
 }
 
 /* === LAYOUT === */
@@ -1426,11 +1495,19 @@ static void layout_block(fz_context *ctx, layout_data *ld, fz_html_box *box, fz_
 static void layout_update_styles(fz_context *ctx, fz_html_box *box, fz_html_box *top)
 {
 	float top_em = top->s.layout.em;
+	float top_baseline = top->s.layout.baseline;
 	float top_w = top->s.layout.w;
 	while (box)
 	{
 		const fz_css_style *style = box->style;
 		float em = box->s.layout.em = fz_from_css_number(style->font_size, top_em, top_em, top_em);
+
+		if (style->vertical_align == VA_SUPER)
+			box->s.layout.baseline = top_baseline - top_em / 3;
+		else if (style->vertical_align == VA_SUB)
+			box->s.layout.baseline = top_baseline + top_em / 5;
+		else
+			box->s.layout.baseline = top_baseline;
 
 		if (box->type != BOX_INLINE && box->type != BOX_FLOW)
 		{
@@ -1628,6 +1705,7 @@ fz_restartable_layout_html(fz_context *ctx, fz_html_tree *tree, float start_x, f
 	{
 		fz_warn(ctx, "html: nothing to layout");
 		box->s.layout.em = em;
+		box->s.layout.baseline = 0;
 		box->s.layout.x = start_x;
 		box->s.layout.w = page_w;
 		box->s.layout.y = start_y;
@@ -1656,6 +1734,7 @@ fz_restartable_layout_html(fz_context *ctx, fz_html_tree *tree, float start_x, f
 		if (box->s.layout.em != em || box->s.layout.x != start_x || box->s.layout.w != page_w)
 		{
 			box->s.layout.em = em;
+			box->s.layout.baseline = 0;
 			box->s.layout.x = start_x;
 			box->s.layout.w = page_w;
 			layout_update_styles(ctx, box->down, box);
@@ -2137,9 +2216,11 @@ static int draw_table_row(fz_context *ctx, fz_html_box *box, float page_top, flo
 static int draw_box(fz_context *ctx, fz_html_box *box, float page_top, float page_bot, fz_device *dev, fz_matrix ctm, hb_buffer_t *hb_buf, fz_html_restarter *restart)
 {
 	int ret = 0;
+	int str = fz_html_tag_to_structure(box->tag);
 
-	if (box->structure != FZ_HTML_STRUCT_UNKNOWN)
-		fz_begin_structure(ctx, dev, fz_html_structure_to_structure(box->structure), fz_html_structure_to_string(box->structure), 0);
+	if (str != FZ_STRUCTURE_INVALID)
+		fz_begin_structure(ctx, dev, str, box->tag, 0);
+
 	switch (box->type)
 	{
 	case BOX_TABLE_ROW:
@@ -2161,7 +2242,8 @@ static int draw_box(fz_context *ctx, fz_html_box *box, float page_top, float pag
 			ret = 1;
 		break;
 	}
-	if (box->structure != FZ_HTML_STRUCT_UNKNOWN)
+
+	if (str != FZ_STRUCTURE_INVALID)
 		fz_end_structure(ctx, dev);
 
 	return ret;
@@ -2513,7 +2595,7 @@ static int enumerate_block_box(fz_context *ctx, fz_html_box *box, float page_top
 
 	if (box->style->visibility == V_VISIBLE && !skipping)
 	{
-		heading = fz_html_heading_from_struct(box->structure);
+		heading = box->heading;
 		if (heading || box->id != NULL || box->href)
 		{
 			/* We have a box worthy of a callback. */

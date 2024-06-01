@@ -1,4 +1,4 @@
-// Copyright (C) 2023 Artifex Software, Inc.
+// Copyright (C) 2023-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -201,7 +201,7 @@ libarchive_reset(fz_context *ctx, fz_libarchive_archive *arch)
 	}
 	fz_seek(ctx, arch->super.file, 0, SEEK_SET);
 	if (libarchive_open(ctx, arch))
-		fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to restart archive traversal!");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to restart archive traversal!");
 
 	arch->current_entry_idx = 0;
 }
@@ -210,8 +210,12 @@ static void
 drop_libarchive_archive(fz_context *ctx, fz_archive *arch_)
 {
 	fz_libarchive_archive *arch = (fz_libarchive_archive *)arch_;
+	int i;
 
 	archive_read_free(arch->archive);
+	for (i = 0; i < arch->entries_len; ++i)
+		fz_free(ctx, arch->entries[i]);
+	fz_free(ctx, arch->entries);
 	arch->archive = NULL;
 }
 
@@ -219,15 +223,37 @@ int
 fz_is_libarchive_archive(fz_context *ctx, fz_stream *file)
 {
 	fz_libarchive_archive arch;
-	int fail;
+	struct archive_entry *entry;
+	int ret;
 
 	arch.super.file = file;
 	fz_seek(ctx, file, 0, SEEK_SET);
-	fail = libarchive_open(ctx, &arch);
-	if (!fail)
-		archive_read_free(arch.archive);
 
-	return !fail;
+	/* Annoyingly, libarchive can say "sure, I can open this" only to
+	 * then fail when we try to read from it. We therefore need to
+	 * try to read at least 1 entry out to be sure. */
+	ret = libarchive_open(ctx, &arch);
+	if (ret == ARCHIVE_OK)
+	{
+		fz_var(ret);
+
+		fz_try(ctx)
+		{
+			arch.ctx = ctx; /* safe */
+			ret = archive_read_next_header(arch.archive, &entry);
+		}
+		fz_catch(ctx)
+		{
+			archive_read_free(arch.archive);
+			fz_rethrow(ctx);
+		}
+	}
+
+	archive_read_free(arch.archive);
+
+	/* Do NOT return true if we get ARCHIVE_EOF. We will fail to recognise empty
+	 * archives, but the alternative is false positives. */
+	return ret == ARCHIVE_OK;
 }
 
 static int
@@ -292,21 +318,22 @@ read_libarchive_entry(fz_context *ctx, fz_archive *arch_, const char *name)
 			if (r == ARCHIVE_OK)
 				r = archive_read_data_skip(arch->archive);
 			if (r != ARCHIVE_OK)
-				fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to skip over archive entry");
+				fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to skip over archive entry");
 			arch->current_entry_idx++;
 		}
 
 		/* This is the one we want. */
 		if (archive_read_next_header(arch->archive, &entry) != ARCHIVE_OK)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to read archive entry header");
+			fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to read archive entry header");
 
 		arch->current_entry_idx++;
 		size = arch->entries[idx]->len;
 		ubuf = fz_new_buffer(ctx, size);
+		ubuf->len = size;
 
 		ret = archive_read_data(arch->archive, ubuf->data, size);
 		if (ret < 0)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to read archive data");
+			fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to read archive data");
 		if ((size_t)ret != size)
 			fz_warn(ctx, "Premature end of data reading archive entry data (%zu vs %zu)", (size_t)ubuf->len, (size_t)size);
 	}
@@ -342,13 +369,15 @@ fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 {
 	fz_libarchive_archive *arch = fz_new_derived_archive(ctx, file, fz_libarchive_archive);
 	int r;
+	int free_path = 0;
+	const char *path = NULL;
 
 	fz_seek(ctx, file, 0, SEEK_SET);
 
 	if (libarchive_open(ctx, arch) != ARCHIVE_OK)
 	{
 		fz_drop_archive(ctx, &arch->super);
-		fz_throw(ctx, FZ_ERROR_GENERIC, "cannot recognize libarchive archive");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "cannot recognize libarchive archive");
 	}
 
 	arch->super.format = "libarchive";
@@ -359,6 +388,9 @@ fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 	arch->super.open_entry = open_libarchive_entry;
 	arch->super.drop_archive = drop_libarchive_archive;
 
+	fz_var(free_path);
+	fz_var(path);
+
 	fz_try(ctx)
 	{
 		arch->ctx = ctx;
@@ -366,7 +398,6 @@ fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 		do
 		{
 			struct archive_entry *entry;
-			const char *path;
 			size_t z;
 
 			r = archive_read_next_header(arch->archive, &entry);
@@ -374,9 +405,15 @@ fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 				break;
 
 			if (r != ARCHIVE_OK)
-				fz_throw(ctx, FZ_ERROR_GENERIC, "Corrupt archive");
+				fz_throw(ctx, FZ_ERROR_LIBRARY, "Corrupt archive");
 
+			free_path = 0;
 			path = archive_entry_pathname_utf8(entry);
+			if (!path)
+			{
+				path = fz_utf8_from_wchar(ctx, archive_entry_pathname_w(entry));
+				free_path = 1;
+			}
 			if (!path)
 				continue;
 
@@ -393,6 +430,11 @@ fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 			z = strlen(path);
 			arch->entries[arch->entries_len] = fz_malloc(ctx, sizeof(entry_t) - 32 + z + 1);
 			memcpy(&arch->entries[arch->entries_len]->name[0], path, z+1);
+			if (free_path)
+			{
+				fz_free(ctx, path);
+				free_path = 0;
+			}
 			arch->entries[arch->entries_len]->len = archive_entry_size(entry);
 
 			arch->entries_len++;
@@ -400,6 +442,11 @@ fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 		while (r != ARCHIVE_EOF && r != ARCHIVE_FATAL);
 
 		libarchive_reset(ctx, arch);
+	}
+	fz_always(ctx)
+	{
+		if (free_path)
+			fz_free(ctx, path);
 	}
 	fz_catch(ctx)
 	{
@@ -566,7 +613,7 @@ next_libarchived(fz_context *ctx, fz_stream *stm, size_t required)
 
 	z = archive_read_data(state->archive, state->block, sizeof(state->block));
 	if (z < 0)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to read compressed data");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to read compressed data");
 	if (z == 0)
 	{
 		stm->eof = 1;
@@ -618,7 +665,7 @@ fz_open_libarchived(fz_context *ctx, fz_stream *chain)
 		state->ctx = NULL;
 		fz_drop_stream(ctx, state->chain);
 		fz_free(ctx, state);
-		fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to open archive");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to open archive");
 	}
 
 	r = archive_filter_code(state->archive, 0);
@@ -628,7 +675,7 @@ fz_open_libarchived(fz_context *ctx, fz_stream *chain)
 		state->ctx = NULL;
 		fz_drop_stream(ctx, state->chain);
 		fz_free(ctx, state);
-		fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to open archive");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to open archive");
 	}
 
 	/* This is the one we want. */
@@ -639,7 +686,7 @@ fz_open_libarchived(fz_context *ctx, fz_stream *chain)
 		state->ctx = NULL;
 		fz_drop_stream(ctx, state->chain);
 		fz_free(ctx, state);
-		fz_throw(ctx, FZ_ERROR_GENERIC, "Failed to open archive");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "Failed to open archive");
 	}
 
 	return fz_new_stream(ctx, state, next_libarchived, close_libarchived);
@@ -664,7 +711,7 @@ fz_is_libarchive_archive(fz_context *ctx, fz_stream *file)
 fz_archive *
 fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 {
-	fz_throw(ctx, FZ_ERROR_GENERIC, "libarchive support not included");
+	fz_throw(ctx, FZ_ERROR_UNSUPPORTED, "libarchive support not included");
 
 	return NULL;
 }
@@ -672,7 +719,7 @@ fz_open_libarchive_archive_with_stream(fz_context *ctx, fz_stream *file)
 fz_archive *
 fz_open_libarchive_archive(fz_context *ctx, const char *filename)
 {
-	fz_throw(ctx, FZ_ERROR_GENERIC, "libarchive support not included");
+	fz_throw(ctx, FZ_ERROR_UNSUPPORTED, "libarchive support not included");
 
 	return NULL;
 }
@@ -680,7 +727,7 @@ fz_open_libarchive_archive(fz_context *ctx, const char *filename)
 fz_stream *
 fz_open_libarchived(fz_context *ctx, fz_stream *chain)
 {
-	fz_throw(ctx, FZ_ERROR_GENERIC, "libarchive support not included");
+	fz_throw(ctx, FZ_ERROR_UNSUPPORTED, "libarchive support not included");
 
 	return NULL;
 }

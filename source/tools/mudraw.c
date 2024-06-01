@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -53,10 +53,6 @@ int gettimeofday(struct timeval *tv, struct timezone *tz);
 #include <unistd.h> /* for getcwd */
 #endif
 
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
-
 /* Allow for windows stdout being made binary */
 #ifdef _WIN32
 #include <io.h>
@@ -85,6 +81,7 @@ enum {
 	OUT_PGM,
 	OUT_PKM,
 	OUT_PNG,
+	OUT_J2K,
 	OUT_PNM,
 	OUT_PPM,
 	OUT_PS,
@@ -129,6 +126,9 @@ static const suffix_t suffix_table[] =
 	{ ".stext.json", OUT_STEXT_JSON, 0 },
 
 	/* And the 'single extension' ones go last. */
+#if FZ_ENABLE_JPX
+	{ ".j2k", OUT_J2K, 0 },
+#endif
 	{ ".png", OUT_PNG, 0 },
 	{ ".pgm", OUT_PGM, 0 },
 	{ ".ppm", OUT_PPM, 0 },
@@ -191,6 +191,7 @@ typedef struct
 static const format_cs_table_t format_cs_table[] =
 {
 	{ OUT_PNG, CS_RGB, { CS_GRAY, CS_GRAY_ALPHA, CS_RGB, CS_RGB_ALPHA, CS_ICC } },
+	{ OUT_J2K, CS_RGB, { CS_GRAY, CS_RGB } },
 	{ OUT_PPM, CS_RGB, { CS_GRAY, CS_RGB } },
 	{ OUT_PNM, CS_GRAY, { CS_GRAY, CS_RGB } },
 	{ OUT_PAM, CS_RGB_ALPHA, { CS_GRAY, CS_GRAY_ALPHA, CS_RGB, CS_RGB_ALPHA, CS_CMYK, CS_CMYK_ALPHA } },
@@ -339,7 +340,7 @@ fz_colorspace *proof_cs = NULL;
 static const char *icc_filename = NULL;
 static float gamma_value = 1;
 static int invert = 0;
-static int kill = 0;
+static int s_kill = 0; /* Using `kill` causes problems on Android. */
 static int band_height = 0;
 static int lowmemory = 0;
 
@@ -366,6 +367,10 @@ static int layer_on[1000];
 static int layer_off[1000];
 static int layer_on_len;
 static int layer_off_len;
+
+static int skew_correct;
+static float skew_angle;
+static int skew_border;
 
 static const char ocr_language_default[] = "eng";
 static const char *ocr_language = ocr_language_default;
@@ -410,7 +415,7 @@ static int usage(void)
 		"\n"
 		"\t-o -\toutput file name (%%d for page number)\n"
 		"\t-F -\toutput format (default inferred from output file name)\n"
-		"\t\traster: png, pnm, pam, pbm, pkm, pwg, pcl, ps\n"
+		"\t\traster: png, pnm, pam, pbm, pkm, pwg, pcl, ps, pdf, j2k\n"
 		"\t\tvector: svg, pdf, trace, ocr.trace\n"
 		"\t\ttext: txt, html, xhtml, stext, stext.json\n"
 #ifndef OCR_DISABLED
@@ -459,6 +464,7 @@ static int usage(void)
 		"\t-KK\tonly draw text\n"
 		"\t-D\tdisable use of display list\n"
 		"\t-i\tignore errors\n"
+		"\t-m -\tlimit memory usage in bytes\n"
 		"\t-L\tlow memory mode (avoid caching, clear objects after each page)\n"
 #ifndef DISABLE_MUTHREADS
 		"\t-P\tparallel interpretation/rendering\n"
@@ -479,9 +485,11 @@ static int usage(void)
 #ifndef OCR_DISABLED
 		"\t-t -\tSpecify language/script for OCR (default: eng)\n"
 		"\t-d -\tSpecify path for OCR files (default: rely on TESSDATA_PREFIX environment variable)\n"
+		"\t-k -{,-}\tSkew correction options. auto or angle {0=increase size, 1=maintain size, 2=decrease size}\n"
 #else
 		"\t-t -\tSpecify language/script for OCR (default: eng) (disabled)\n"
 		"\t-d -\tSpecify path for OCR files (default: rely on TESSDATA_PREFIX environment variable) (disabled)\n"
+		"\t-k -{,-}\tSkew correction options. auto or angle {0=increase size, 1=maintain size, 2=decrease size} (disabled)\n"
 #endif
 		"\n"
 		"\t-y l\tList the layer configs to stderr\n"
@@ -568,6 +576,9 @@ file_level_headers(fz_context *ctx)
 			fz_strlcat(options, ocr_datadir, sizeof (options));
 		}
 		fz_parse_pdfocr_options(ctx, &opts, options);
+		opts.skew_correct = skew_correct;
+		opts.skew_border = skew_border;
+		opts.skew_angle = skew_angle;
 		bander = fz_new_pdfocr_band_writer(ctx, out, &opts);
 	}
 }
@@ -598,14 +609,14 @@ file_level_trailers(fz_context *ctx)
 
 static void apply_kill_switch(fz_device *dev)
 {
-	if (kill == 1)
+	if (s_kill == 1)
 	{
 		/* kill all non-clipping text operators */
 		dev->fill_text = NULL;
 		dev->stroke_text = NULL;
 		dev->ignore_text = NULL;
 	}
-	else if (kill == 2)
+	else if (s_kill == 2)
 	{
 		/* kill all non-clipping path, image, and shading operators */
 		dev->fill_path = NULL;
@@ -809,7 +820,7 @@ static void dodrawpage(fz_context *ctx, fz_page *page, fz_display_list *list, in
 
 		fz_try(ctx)
 		{
-			fz_stext_options stext_options;
+			fz_stext_options stext_options = { 0 };
 
 			stext_options.flags = (output_format == OUT_HTML ||
 						output_format == OUT_XHTML ||
@@ -1127,6 +1138,10 @@ static void dodrawpage(fz_context *ctx, fz_page *page, fz_display_list *list, in
 					fz_write_header(ctx, bander, pix->w, totalheight, pix->n, pix->alpha, pix->xres, pix->yres, output_pagenum++, pix->colorspace, pix->seps);
 				}
 			}
+			if (output_format == OUT_J2K && bands > 1)
+			{
+				fz_throw(ctx, FZ_ERROR_ARGUMENT, "Can't band with J2k output!");
+			}
 
 			for (band = 0; band < bands; band++)
 			{
@@ -1153,6 +1168,14 @@ static void dodrawpage(fz_context *ctx, fz_page *page, fz_display_list *list, in
 				{
 					if (bander && (pix || bit))
 						fz_write_band(ctx, bander, bit ? bit->stride : pix->stride, drawheight, bit ? bit->samples : pix->samples);
+#if FZ_ENABLE_JPX
+					if (output_format == OUT_J2K)
+					{
+						fz_write_pixmap_as_jpx(ctx, out, pix, 80);
+					}
+#else
+					fz_throw(ctx, FZ_ERROR_GENERIC, "JPX support disabled");
+#endif
 					fz_drop_bitmap(ctx, bit);
 					bit = NULL;
 				}
@@ -1887,26 +1910,6 @@ static void apply_layer_config(fz_context *ctx, fz_document *doc, const char *lc
 #endif
 }
 
-static int
-fz_mkdir(char *path)
-{
-#ifdef _WIN32
-	int ret;
-	wchar_t *wpath = fz_wchar_from_utf8(path);
-
-	if (wpath == NULL)
-		return -1;
-
-	ret = _wmkdir(wpath);
-
-	free(wpath);
-
-	return ret;
-#else
-	return mkdir(path, S_IRWXU | S_IRWXG | S_IRWXO);
-#endif
-}
-
 static int create_accel_path(fz_context *ctx, char outname[], size_t len, int create, const char *absname, ...)
 {
 	va_list args;
@@ -2028,7 +2031,7 @@ int mudraw_main(int argc, char **argv)
 
 	fz_var(doc);
 
-	while ((c = fz_getopt(argc, argv, "qp:o:F:R:r:w:h:fB:c:e:G:Is:A:DiW:H:S:T:t:d:U:XLvPl:y:Yz:Z:NO:am:Kb:")) != -1)
+	while ((c = fz_getopt(argc, argv, "qp:o:F:R:r:w:h:fB:c:e:G:Is:A:DiW:H:S:T:t:d:U:XLvPl:y:Yz:Z:NO:am:Kb:k:")) != -1)
 	{
 		switch (c)
 		{
@@ -2067,7 +2070,7 @@ int mudraw_main(int argc, char **argv)
 		case 'U': layout_css = fz_optarg; break;
 		case 'X': layout_use_doc_css = 0; break;
 
-		case 'K': ++kill; break;
+		case 'K': ++s_kill; break;
 
 		case 'O': spots = fz_atof(fz_optarg);
 #ifndef FZ_ENABLE_SPOT_RENDERING
@@ -2138,6 +2141,18 @@ int mudraw_main(int argc, char **argv)
 		case 'z': layer_off[layer_off_len++] = !strcmp(fz_optarg, "all") ? -1 : fz_atoi(fz_optarg); break;
 		case 'Z': layer_on[layer_on_len++] = !strcmp(fz_optarg, "all") ? -1 : fz_atoi(fz_optarg); break;
 		case 'a': useaccel = 0; break;
+		case 'k':
+		{
+			const char *a;
+			if (fz_optarg[0] == 'a')
+				skew_correct = 1;
+			else
+				skew_correct = 2, skew_angle = fz_atof(fz_optarg);
+			a = strchr(fz_optarg, ',');
+			if (a != NULL)
+				skew_border = fz_atoi(fz_optarg+1);
+			break;
+		}
 
 		case 'v': fprintf(stderr, "mudraw version %s\n", FZ_VERSION); return 1;
 		}
@@ -2570,7 +2585,7 @@ int mudraw_main(int argc, char **argv)
 					if (fz_needs_password(ctx, doc))
 					{
 						if (!fz_authenticate_password(ctx, doc, password))
-							fz_throw(ctx, FZ_ERROR_GENERIC, "cannot authenticate password: %s", filename);
+							fz_throw(ctx, FZ_ERROR_ARGUMENT, "cannot authenticate password: %s", filename);
 					}
 
 #ifdef CLUSTER

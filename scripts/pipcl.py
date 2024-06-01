@@ -23,7 +23,6 @@ import platform
 import re
 import shutil
 import site
-import setuptools
 import subprocess
 import sys
 import sysconfig
@@ -76,8 +75,10 @@ class Package:
         ...                         )
         ...                 return [
         ...                         ('build/foo.py', 'foo/__init__.py'),
+        ...                         ('cli.py', 'foo/__main__.py'),
         ...                         (f'build/{so_leaf}', f'foo/'),
         ...                         ('README', '$dist-info/'),
+        ...                         (b'Hello world', 'foo/hw.txt'),
         ...                         ]
         ...
         ...             def sdist():
@@ -88,6 +89,7 @@ class Package:
         ...                         'pipcl.py',
         ...                         'wdev.py',
         ...                         'README',
+        ...                         (b'Hello word2', 'hw2.txt'),
         ...                         ]
         ...
         ...             p = pipcl.Package(
@@ -95,6 +97,11 @@ class Package:
         ...                     version = '1.2.3',
         ...                     fn_build = build,
         ...                     fn_sdist = sdist,
+        ...                     entry_points = (
+        ...                         { 'console_scripts': [
+        ...                             'foo_cli = foo.__main__:main',
+        ...                             ],
+        ...                         }),
         ...                     )
         ...
         ...             build_wheel = p.build_wheel
@@ -132,6 +139,14 @@ class Package:
         >>> with open('pipcl_test/README', 'w') as f:
         ...     _ = f.write(textwrap.dedent("""
         ...             This is Foo.
+        ...             """))
+
+        >>> with open('pipcl_test/cli.py', 'w') as f:
+        ...     _ = f.write(textwrap.dedent("""
+        ...             def main():
+        ...                 print('pipcl_test:main().')
+        ...             if __name__ == '__main__':
+        ...                 main()
         ...             """))
 
         >>> root = os.path.dirname(__file__)
@@ -223,6 +238,25 @@ class Package:
         >>> so = so[0]
         >>> assert os.path.getmtime(so) > t0
 
+    Check `entry_points` causes creation of command `foo_cli` when we install
+    from our wheel using pip. [As of 2024-02-24 using pipcl's CLI interface
+    directly with `setup.py install` does not support entry points.]
+
+        >>> print('Creating venv.', file=sys.stderr)
+        >>> _ = subprocess.run(
+        ...         f'cd pipcl_test && {sys.executable} -m venv pylocal',
+        ...         shell=1, check=1)
+
+        >>> print('Installing from wheel into venv using pip.', file=sys.stderr)
+        >>> _ = subprocess.run(
+        ...         f'. pipcl_test/pylocal/bin/activate && pip install pipcl_test/dist/*.whl',
+        ...         shell=1, check=1)
+
+        >>> print('Running foo_cli.', file=sys.stderr)
+        >>> _ = subprocess.run(
+        ...         f'. pipcl_test/pylocal/bin/activate && foo_cli',
+        ...         shell=1, check=1)
+
     Wheels and sdists
 
         Wheels:
@@ -245,6 +279,7 @@ class Package:
     def __init__(self,
             name,
             version,
+            *,
             platform = None,
             supported_platform = None,
             summary = None,
@@ -264,6 +299,8 @@ class Package:
             requires_external = None,
             project_url = None,
             provides_extra = None,
+
+            entry_points = None,
 
             root = None,
             fn_build = None,
@@ -334,6 +371,24 @@ class Package:
             provides_extra:
                 A string or list of strings.
 
+            entry_points:
+                String or dict specifying *.dist-info/entry_points.txt, for
+                example:
+
+                    ```
+                    [console_scripts]
+                    foo_cli = foo.__main__:main
+                    ```
+
+                or:
+
+                    { 'console_scripts': [
+                        'foo_cli = foo.__main__:main',
+                        ],
+                    }
+
+                See: https://packaging.python.org/en/latest/specifications/entry-points/
+
             root:
                 Root of package, defaults to current directory.
 
@@ -341,16 +396,18 @@ class Package:
                 A function taking no args, or a single `config_settings` dict
                 arg (as described in PEP-517), that builds the package.
 
-                Should return a list of items; each item should be a tuple of
-                two strings `(from_, to_)`, or a single string `path` which is
-                treated as the tuple `(path, path)`.
+                Should return a list of items; each item should be a tuple
+                `(from_, to_)`, or a single string `path` which is treated as
+                the tuple `(path, path)`.
 
-                `from_` should be the path to a file; if a relative path it is
-                assumed to be relative to `root`.
+                `from_` can be a string or a `bytes`. If a string it should
+                be the path to a file; a relative path is treated as relative
+                to `root`. If a `bytes` it is the contents of the file to be
+                added.
 
                 `to_` identifies what the file should be called within a wheel
                 or when installing. If `to_` ends with `/`, the leaf of `from_`
-                is appended to it.
+                is appended to it (and `from_` must not be a `bytes`).
 
                 Initial `$dist-info/` in `_to` is replaced by
                 `{name}-{version}.dist-info/`; this is useful for license files
@@ -384,13 +441,9 @@ class Package:
 
             fn_sdist:
                 A function taking no args, or a single `config_settings` dict
-                arg (as described in PEP517), that returns a list of paths for
-                files that should be copied into the sdist. Each item in the
-                list can also be a tuple `(from_, to_)`, where `from_` is the
-                path of a file and `to_` is its name within the sdist.
-
-                Relative paths are interpreted as relative to `root`. It is an
-                error if a path does not exist or is not a file.
+                arg (as described in PEP517), that returns a list of items to
+                be copied into the sdist. The list should be in the same format
+                as returned by `fn_build`.
 
                 It can be convenient to use `pipcl.git_items()`.
 
@@ -500,6 +553,7 @@ class Package:
         self.requires_external = requires_external
         self.project_url = project_url
         self.provides_extra = provides_extra
+        self.entry_points = entry_points
 
         self.root = os.path.abspath(root if root else os.getcwd())
         self.fn_build = fn_build
@@ -559,6 +613,7 @@ class Package:
             # PEP-425. On Linux gives `linux_x86_64` which is rejected by
             # pypi.org.
             #
+            import setuptools
             tag_platform = setuptools.distutils.util.get_platform().replace('-', '_').replace('.', '_')
 
             # We need to patch things on MacOS.
@@ -591,21 +646,26 @@ class Package:
         record = _Record()
         with zipfile.ZipFile(path, 'w', self.wheel_compression, self.wheel_compresslevel) as z:
 
-            def add_file(from_, to_):
-                z.write(from_, to_)
-                record.add_file(from_, to_)
+            def add(from_, to_):
+                if isinstance(from_, str):
+                    z.write(from_, to_)
+                    record.add_file(from_, to_)
+                elif isinstance(from_, bytes):
+                    z.writestr(to_, from_)
+                    record.add_content(from_, to_)
+                else:
+                    assert 0
 
             def add_str(content, to_):
-                z.writestr(to_, content)
-                record.add_content(content, to_)
+                add(content.encode('utf8'), to_)
 
             dist_info_dir = self._dist_info_dir()
 
             # Add the files returned by fn_build().
             #
             for item in items:
-                (from_abs, from_rel), (to_abs, to_rel) = self._fromto(item)
-                add_file(from_abs, to_rel)
+                from_, (to_abs, to_rel) = self._fromto(item)
+                add(from_, to_rel)
 
             # Add <name>-<version>.dist-info/WHEEL.
             #
@@ -624,6 +684,11 @@ class Package:
             # Add <name>-<version>.dist-info/COPYING.
             if self.license:
                 add_str(self.license, f'{dist_info_dir}/COPYING')
+
+            # Add <name>-<version>.dist-info/entry_points.txt.
+            entry_points_text = self._entry_points_text()
+            if entry_points_text:
+                add_str(entry_points_text, f'{dist_info_dir}/entry_points.txt')
 
             # Update <name>-<version>.dist-info/RECORD. This must be last.
             #
@@ -666,64 +731,77 @@ class Package:
             else:
                 items = self.fn_sdist()
 
-        manifest = []
-        names_in_tar = []
-        def check_name(name):
-            if name in names_in_tar:
-                raise Exception(f'Name specified twice: {name}')
-            names_in_tar.append(name)
-
         prefix = f'{self.name}-{self.version}'
-        def add_content(tar, name, contents):
-            '''
-            Adds item called `name` to `tarfile.TarInfo` `tar`, containing
-            `contents`. If contents is a string, it is encoded using utf8.
-            '''
-            log2( f'Adding: {name}')
-            if isinstance(contents, str):
-                contents = contents.encode('utf8')
-            check_name(name)
-            ti = tarfile.TarInfo(f'{prefix}/{name}')
-            ti.size = len(contents)
-            ti.mtime = time.time()
-            tar.addfile(ti, io.BytesIO(contents))
-
-        def add_file(tar, path_abs, name):
-            log2( f'Adding file: {os.path.relpath(path_abs)} => {name}')
-            check_name(name)
-            tar.add( path_abs, f'{prefix}/{name}', recursive=False)
-
         os.makedirs(sdist_directory, exist_ok=True)
         tarpath = f'{sdist_directory}/{prefix}.tar.gz'
         log2(f'Creating sdist: {tarpath}')
+
         with tarfile.open(tarpath, 'w:gz') as tar:
+
+            names_in_tar = list()
+            def check_name(name):
+                if name in names_in_tar:
+                    raise Exception(f'Name specified twice: {name}')
+                names_in_tar.append(name)
+
+            def add(from_, name):
+                check_name(name)
+                if isinstance(from_, str):
+                    log2( f'Adding file: {os.path.relpath(from_)} => {name}')
+                    tar.add( from_, f'{prefix}/{name}', recursive=False)
+                elif isinstance(from_, bytes):
+                    log2( f'Adding: {name}')
+                    ti = tarfile.TarInfo(f'{prefix}/{name}')
+                    ti.size = len(from_)
+                    ti.mtime = time.time()
+                    tar.addfile(ti, io.BytesIO(from_))
+                else:
+                    assert 0
+
+            def add_string(text, name):
+                textb = text.encode('utf8')
+                return add(textb, name)
+
             found_pyproject_toml = False
             for item in items:
-                (from_abs, from_rel), (to_abs, to_rel) = self._fromto(item)
-                if from_abs.startswith(f'{os.path.abspath(sdist_directory)}/'):
-                    # Source files should not be inside <sdist_directory>.
-                    assert 0, f'Path is inside sdist_directory={sdist_directory}: {from_abs!r}'
-                assert os.path.exists(from_abs), f'Path does not exist: {from_abs!r}'
-                assert os.path.isfile(from_abs), f'Path is not a file: {from_abs!r}'
-                if to_rel == 'pyproject.toml':
-                    found_pyproject_toml = True
-                add_file( tar, from_abs, to_rel)
-                manifest.append(to_rel)
+                from_, (to_abs, to_rel) = self._fromto(item)
+                if isinstance(from_, bytes):
+                    add(from_, to_rel)
+                else:
+                    if from_.startswith(f'{os.path.abspath(sdist_directory)}/'):
+                        # Source files should not be inside <sdist_directory>.
+                        assert 0, f'Path is inside sdist_directory={sdist_directory}: {from_!r}'
+                    assert os.path.exists(from_), f'Path does not exist: {from_!r}'
+                    assert os.path.isfile(from_), f'Path is not a file: {from_!r}'
+                    if to_rel == 'pyproject.toml':
+                        found_pyproject_toml = True
+                    add(from_, to_rel)
+
             if not found_pyproject_toml:
                 log0(f'Warning: no pyproject.toml specified.')
 
             # Always add a PKG-INFO file.
-            add_content(tar, f'PKG-INFO', self._metainfo())
+            add_string(self._metainfo(), 'PKG-INFO')
 
             if self.license:
                 if 'COPYING' in names_in_tar:
                     log2(f'Not writing .license because file already in sdist: COPYING')
                 else:
-                    add_content(tar, f'COPYING', self.license)
+                    add_string(self.license, 'COPYING')
 
         log1( f'Have created sdist: {tarpath}')
         return os.path.basename(tarpath)
 
+    def _entry_points_text(self):
+        if self.entry_points:
+            if isinstance(self.entry_points, str):
+                return self.entry_points
+            ret = ''
+            for key, values in self.entry_points.items():
+                ret += f'[{key}]\n'
+                for value in values:
+                    ret += f'{value}\n'
+            return ret
 
     def _call_fn_build( self, config_settings=None):
         assert self.fn_build
@@ -779,11 +857,18 @@ class Package:
             record_path = f'{root2}/{dist_info_dir}/RECORD'
         record = _Record()
 
-        def add_file(from_abs, from_rel, to_abs, to_rel):
-            log2(f'Copying from {from_rel} to {to_abs}')
+        def add_file(from_, to_abs, to_rel):
             os.makedirs( os.path.dirname( to_abs), exist_ok=True)
-            shutil.copy2( from_abs, to_abs)
-            record.add_file(from_rel, to_rel)
+            if isinstance(from_, bytes):
+                log2(f'Copying content into {to_abs}.')
+                with open(to_abs, 'wb') as f:
+                    f.write(from_)
+                record.add_content(from_, to_rel)
+            else:
+                log0(f'{from_=}')
+                log2(f'Copying from {os.path.relpath(from_, self.root)} to {to_abs}')
+                shutil.copy2( from_, to_abs)
+                record.add_file(from_, to_rel)
 
         def add_str(content, to_abs, to_rel):
             log2( f'Writing to: {to_abs}')
@@ -793,11 +878,23 @@ class Package:
             record.add_content(content, to_rel)
 
         for item in items:
-            (from_abs, from_rel), (to_abs, to_rel) = self._fromto(item)
+            from_, (to_abs, to_rel) = self._fromto(item)
+            log0(f'{from_=} {to_abs=} {to_rel=}')
             to_abs2 = f'{root2}/{to_rel}'
-            add_file( from_abs, from_rel, to_abs2, to_rel)
+            add_file( from_, to_abs2, to_rel)
 
         add_str( self._metainfo(), f'{root2}/{dist_info_dir}/METADATA', f'{dist_info_dir}/METADATA')
+
+        if self.license:
+            add_str( self.license, f'{root2}/{dist_info_dir}/COPYING', f'{dist_info_dir}/COPYING')
+
+        entry_points_text = self._entry_points_text()
+        if entry_points_text:
+            add_str(
+                    entry_points_text,
+                    f'{root2}/{dist_info_dir}/entry_points.txt',
+                    f'{dist_info_dir}/entry_points.txt',
+                    )
 
         log2( f'Writing to: {record_path}')
         with open(record_path, 'w') as f:
@@ -1164,12 +1261,14 @@ class Package:
 
     def _fromto(self, p):
         '''
-        Returns `((from_abs, from_rel), (to_abs, to_rel))`.
+        Returns `(from_, (to_abs, to_rel))`.
 
-        If `p` is a string we convert to `(p, p)`. Otherwise we assert
-        that `p` is a tuple of two string, `(from_, to_)`. Non-absolute
-        paths are assumed to be relative to `self.root`. If `to_` is
-        empty or ends with `/`, we append the leaf of `from_`.
+        If `p` is a string we convert to `(p, p)`. Otherwise we assert that
+        `p` is a tuple `(from_, to_)` where `from_` is str/bytes and `to_` is
+        str. If `from_` is a bytes it is contents of file to add, otherwise the
+        path of an existing file; non-absolute paths are assumed to be relative
+        to `self.root`. If `to_` is empty or ends with `/`, we append the leaf
+        of `from_` (which must be a str).
 
         If `to_` starts with `$dist-info/`, we replace this with
         `self._dist_info_dir()`.
@@ -1177,21 +1276,18 @@ class Package:
         If `to_` starts with `$data/`, we replace this with
         `{self.name}-{self.version}.data/`.
 
-        `from_abs` and `to_abs` are absolute paths. We assert that `to_abs` is
-        `within self.root`.
+        We assert that `to_abs` is `within self.root`.
 
-        `from_rel` and `to_rel` are derived from the `_abs` paths and are
-        `relative to self.root`.
+        `to_rel` is derived from the `to_abs` and is relative to self.root`.
         '''
         ret = None
         if isinstance(p, str):
-            ret = p, p
-        elif isinstance(p, tuple) and len(p) == 2:
-            from_, to_ = p
-            if isinstance(from_, str) and isinstance(to_, str):
-                ret = from_, to_
-        assert ret, 'p should be str or (str, str), but is: {p}'
-        from_, to_ = ret
+            p = p, p
+        assert isinstance(p, tuple) and len(p) == 2
+
+        from_, to_ = p
+        assert isinstance(from_, (str, bytes))
+        assert isinstance(to_, str)
         if to_.endswith('/') or to_=='':
             to_ += os.path.basename(from_)
         prefix = '$dist-info/'
@@ -1200,8 +1296,11 @@ class Package:
         prefix = '$data/'
         if to_.startswith( prefix):
             to_ = f'{self.name}-{self.version}.data/{to_[ len(prefix):]}'
-        from_ = self._path_relative_to_root( from_, assert_within_root=False)
+        if isinstance(from_, str):
+            from_, _ = self._path_relative_to_root( from_, assert_within_root=False)
         to_ = self._path_relative_to_root(to_)
+        assert isinstance(from_, (str, bytes))
+        log2(f'returning {from_=} {to_=}')
         return from_, to_
 
 
@@ -1463,7 +1562,7 @@ def build_extension(
             #   emcc: warning: ignoring unsupported linker flag: `-rpath` [-Wlinkflags]
             #   wasm-ld: error: unknown -z value: origin
             #
-            log0(f'## pyodide(): PEP-3149 suffix untested, so omitting. {_so_suffix()=}.')
+            log0(f'pyodide: PEP-3149 suffix untested, so omitting. {_so_suffix()=}.')
             path_so_leaf = f'_{name}.so'
             path_so = f'{outdir}/{path_so_leaf}'
 
@@ -1529,7 +1628,7 @@ def build_extension(
                         {libs_text}
                         {rpath_flag}
                     '''
-        run_if(
+        command_was_run = run_if(
                 command,
                 path_so,
                 path_cpp,
@@ -1538,10 +1637,10 @@ def build_extension(
                 prerequisites,
                 )
 
-        if darwin():
+        if command_was_run and darwin():
             # We need to patch up references to shared libraries in `libs`.
             sublibraries = list()
-            for lib in libs:
+            for lib in () if libs is None else libs:
                 for libpath in libpaths:
                     found = list()
                     for suffix in '.so', '.dylib':
@@ -1581,7 +1680,9 @@ def base_compiler(vs=None, pythonflags=None, cpp=False, use_env=True):
             If true we return C++ compiler command instead of C. On Windows
             this has no effect - we always return `cl.exe`.
         use_env:
-            If true we use `os.environ['CC']` or `os.environ['CXX']` if set.
+            If true we return '$CC' or '$CXX' if the corresponding
+            environmental variable is set (without evaluating with `getenv()`
+            or `os.environ`).
 
     Returns `(cc, pythonflags)`:
         cc:
@@ -1592,7 +1693,14 @@ def base_compiler(vs=None, pythonflags=None, cpp=False, use_env=True):
     '''
     if not pythonflags:
         pythonflags = PythonFlags()
-    cc = os.environ.get( 'CXX' if cpp else 'CC') if use_env else None
+    cc = None
+    if use_env:
+        if cpp:
+            if os.environ.get( 'CXX'):
+                cc = '$CXX'
+        else:
+            if os.environ.get( 'CC'):
+                cc = '$CC'
     if cc:
         pass
     elif windows():
@@ -1633,7 +1741,10 @@ def base_linker(vs=None, pythonflags=None, cpp=False, use_env=True):
     '''
     if not pythonflags:
         pythonflags = PythonFlags()
-    linker = os.environ.get( 'LD') if use_env else None
+    linker = None
+    if use_env:
+        if os.environ.get( 'LD'):
+            linker = '$LD'
     if linker:
         pass
     elif windows():
@@ -1687,7 +1798,7 @@ def git_items( directory, submodules=False):
     return ret
 
 
-def run( command, capture=False, check=1):
+def run( command, capture=False, check=1, verbose=1):
     '''
     Runs a command using `subprocess.run()`.
 
@@ -1703,25 +1814,38 @@ def run( command, capture=False, check=1):
             When running the command, on Windows newlines are replaced by
             spaces; otherwise each line is terminated by a backslash character.
         capture:
-            If true, we return output from command.
+            If true, we include the command's output in our return value.
+        check:
+            If true we raise an exception on error; otherwise we include the
+            command's returncode in our return value.
+        verbose:
+            If true we show the command.
     Returns:
-        None on success, otherwise raises an exception.
+        check capture   Return
+        --------------------------
+          false false   returncode
+          false  true   (returncode, output)
+          true  false   None or raise exception
+          true   true   output or raise exception
     '''
     lines = _command_lines( command)
     nl = '\n'
-    log2( f'Running: {nl.join(lines)}')
+    if verbose:
+        log1( f'Running: {nl.join(lines)}')
     sep = ' ' if windows() else '\\\n'
     command2 = sep.join( lines)
-    if capture:
-        return subprocess.run(
-                command2,
-                shell=True,
-                capture_output=True,
-                check=check,
-                encoding='utf8',
-                ).stdout
+    cp = subprocess.run(
+            command2,
+            shell=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.STDOUT if capture else None,
+            check=check,
+            encoding='utf8',
+            )
+    if check:
+        return cp.stdout if capture else None
     else:
-        subprocess.run( command2, shell=True, check=check)
+        return (cp.returncode, cp.stdout) if capture else cp.returncode
 
 
 def darwin():
@@ -1739,10 +1863,16 @@ def pyodide():
 def linux():
     return platform.system() == 'Linux'
 
+def openbsd():
+    return platform.system() == 'OpenBSD'
+
 class PythonFlags:
     '''
     Compile/link flags for the current python, for example the include path
     needed to get `Python.h`.
+
+    The 'PIPCL_PYTHON_CONFIG' environment variable allows to override
+    the location of the python-config executable.
 
     Members:
         .includes:
@@ -1762,53 +1892,53 @@ class PythonFlags:
             _lib_dir = os.environ[ 'PYO3_CROSS_LIB_DIR']
             self.includes = f'-I {_include_dir}'
             self.ldflags = f'-L {_lib_dir}'
-            log2(f'PythonFlags: Pyodide.')
-            log2( f'    {_include_dir=}')
-            log2( f'    {_lib_dir=}')
 
         else:
-            # We use python-config which appears to work better than pkg-config
-            # because it copes with multiple installed python's, e.g.
-            # manylinux_2014's /opt/python/cp*-cp*/bin/python*.
-            #
-            # But... on non-macos it seems that we should not attempt to specify
-            # libpython on the link command. The manylinux docker containers
-            # don't actually contain libpython.so, and it seems that this
-            # deliberate. And the link command runs ok.
-            #
-            python_exe = os.path.realpath( sys.executable)
-            if darwin():
-                # Basic install of dev tools with `xcode-select --install` doesn't
-                # seem to provide a `python3-config` or similar, but there is a
-                # `python-config.py` accessible via sysconfig.
+            python_config = os.environ.get("PIPCL_PYTHON_CONFIG")
+            if not python_config:
+                # We use python-config which appears to work better than pkg-config
+                # because it copes with multiple installed python's, e.g.
+                # manylinux_2014's /opt/python/cp*-cp*/bin/python*.
                 #
-                # We try different possibilities and use the last one that
-                # works.
+                # But... on non-macos it seems that we should not attempt to specify
+                # libpython on the link command. The manylinux docker containers
+                # don't actually contain libpython.so, and it seems that this
+                # deliberate. And the link command runs ok.
                 #
-                python_config = None
-                for pc in (
-                        f'python3-config',
-                        f'{sys.executable} {sysconfig.get_config_var("srcdir")}/python-config.py',
-                        f'{python_exe}-config',
-                        ):
-                    e = subprocess.run(
-                            f'{pc} --includes',
-                            shell=1,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            check=0,
-                            ).returncode
-                    log1(f'{e=} from {pc!r}.')
-                    if e == 0:
-                        python_config = pc
-                assert python_config, f'Cannot find python-config'
-            else:
-                python_config = f'{python_exe}-config'
-            log1(f'Using {python_config=}.')
-            self.includes = run( f'{python_config} --includes', capture=1).strip()
-            #if darwin():
-            #    self.ldflags =
-            self.ldflags = run( f'{python_config} --ldflags', capture=1).strip()
+                python_exe = os.path.realpath( sys.executable)
+                if darwin():
+                    # Basic install of dev tools with `xcode-select --install` doesn't
+                    # seem to provide a `python3-config` or similar, but there is a
+                    # `python-config.py` accessible via sysconfig.
+                    #
+                    # We try different possibilities and use the last one that
+                    # works.
+                    #
+                    python_config = None
+                    for pc in (
+                            f'python3-config',
+                            f'{sys.executable} {sysconfig.get_config_var("srcdir")}/python-config.py',
+                            f'{python_exe}-config',
+                            ):
+                        e = subprocess.run(
+                                f'{pc} --includes',
+                                shell=1,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=0,
+                                ).returncode
+                        log2(f'{e=} from {pc!r}.')
+                        if e == 0:
+                            python_config = pc
+                    assert python_config, f'Cannot find python-config'
+                else:
+                    python_config = f'{python_exe}-config'
+            log2(f'Using {python_config=}.')
+            try:
+                self.includes = run( f'{python_config} --includes', capture=1, verbose=0).strip()
+            except Exception as e:
+                raise Exception('We require python development tools to be installed.') from e
+            self.ldflags = run( f'{python_config} --ldflags', capture=1, verbose=0).strip()
             if linux():
                 # It seems that with python-3.10 on Linux, we can get an
                 # incorrect -lcrypt flag that on some systems (e.g. WSL)
@@ -1855,6 +1985,8 @@ def macos_patch( library, *sublibraries):
     '''
     log2( f'macos_patch(): library={library}  sublibraries={sublibraries}')
     if not darwin():
+        return
+    if not sublibraries:
         return
     subprocess.run( f'otool -L {library}', shell=1, check=1)
     command = 'install_name_tool'
@@ -1971,7 +2103,7 @@ def run_if( command, out, *prerequisites):
     if not doit:
         out_mtime = _fs_mtime( out)
         if out_mtime == 0:
-            doit = 'File does not exist: {out!e}'
+            doit = f'File does not exist: {out!r}'
 
     cmd_path = f'{out}.cmd'
     if os.path.isfile( cmd_path):
@@ -2026,7 +2158,7 @@ def run_if( command, out, *prerequisites):
             os.remove( cmd_path)
         except Exception:
             pass
-        log2( f'Running command because: {doit}')
+        log1( f'Running command because: {doit}')
 
         run( command)
 
@@ -2035,7 +2167,7 @@ def run_if( command, out, *prerequisites):
             f.write( command)
         return True
     else:
-        log2( f'Not running command because up to date: {out!r}')
+        log1( f'Not running command because up to date: {out!r}')
 
     if 0:
         log2( f'out_mtime={time.ctime(out_mtime)} pre_mtime={time.ctime(pre_mtime)}.'
@@ -2101,7 +2233,7 @@ def _fs_mtime( filename, default=0):
     except OSError:
         return default
 
-g_verbose = int(os.environ.get('PIPCL_VERBOSE', '2'))
+g_verbose = int(os.environ.get('PIPCL_VERBOSE', '1'))
 
 def verbose(level=None):
     '''
@@ -2153,6 +2285,32 @@ def _so_suffix():
     return sysconfig.get_config_var('EXT_SUFFIX')
 
 
+def get_soname(path):
+    '''
+    If we are on Linux and `path` is softlink and points to a shared library
+    for which `objdump -p` contains 'SONAME', return the pointee. Otherwise
+    return `path`. Useful if Linux shared libraries have been created with
+    `-Wl,-soname,...`, where we need to embed the versioned library.
+    '''
+    if linux() and os.path.islink(path):
+        path2 = os.path.realpath(path)
+        if subprocess.run(f'objdump -p {path2}|grep SONAME', shell=1, check=0).returncode == 0:
+            return path2
+    elif openbsd():
+        # Return newest .so with version suffix.
+        sos = glob.glob(f'{path}.*')
+        log1(f'{sos=}')
+        sos2 = list()
+        for so in sos:
+            suffix = so[len(path):]
+            if not suffix or re.match('^[.][0-9.]*[0-9]$', suffix):
+                sos2.append(so)
+        sos2.sort(key=lambda p: os.path.getmtime(p))
+        log1(f'{sos2=}')
+        return sos2[-1]
+    return path
+
+
 def install_dir(root=None):
     '''
     Returns install directory used by `install()`.
@@ -2187,7 +2345,7 @@ class _Record:
     def __init__(self):
         self.text = ''
 
-    def add_content(self, content, to_):
+    def add_content(self, content, to_, verbose=True):
         if isinstance(content, str):
             content = content.encode('utf8')
 
@@ -2202,13 +2360,14 @@ class _Record:
         digest = digest.decode('utf8')
 
         self.text += f'{to_},sha256={digest},{len(content)}\n'
-        log2(f'Adding {to_}')
+        if verbose:
+            log2(f'Adding {to_}')
 
     def add_file(self, from_, to_):
+        log1(f'Adding file: {os.path.relpath(from_)} => {to_}')
         with open(from_, 'rb') as f:
             content = f.read()
-        self.add_content(content, to_)
-        log2(f'Adding file: {os.path.relpath(from_)} => {to_}')
+        self.add_content(content, to_, verbose=False)
 
     def get(self, record_path=None):
         '''

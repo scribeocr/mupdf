@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
 
 /* Enable FITZ_DEBUG_LOCKING_TIMES below if you want to check the times
  * for which locks are held too. */
@@ -88,7 +89,10 @@ fz_malloc(fz_context *ctx, size_t size)
 		return NULL;
 	p = do_scavenging_malloc(ctx, size);
 	if (!p)
-		fz_throw(ctx, FZ_ERROR_MEMORY, "malloc of %zu bytes failed", size);
+	{
+		errno = ENOMEM;
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "malloc (%zu bytes) failed", size);
+	}
 	return p;
 }
 
@@ -107,10 +111,13 @@ fz_calloc(fz_context *ctx, size_t count, size_t size)
 	if (count == 0 || size == 0)
 		return NULL;
 	if (count > SIZE_MAX / size)
-		fz_throw(ctx, FZ_ERROR_MEMORY, "calloc (%zu x %zu bytes) failed (size_t overflow)", count, size);
+		fz_throw(ctx, FZ_ERROR_LIMIT, "calloc (%zu x %zu bytes) failed (size_t overflow)", count, size);
 	p = do_scavenging_malloc(ctx, count * size);
 	if (!p)
-		fz_throw(ctx, FZ_ERROR_MEMORY, "calloc (%zu x %zu bytes) failed", count, size);
+	{
+		errno = ENOMEM;
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "calloc (%zu x %zu bytes) failed", count, size);
+	}
 	memset(p, 0, count*size);
 	return p;
 }
@@ -139,7 +146,10 @@ fz_realloc(fz_context *ctx, void *p, size_t size)
 	}
 	p = do_scavenging_realloc(ctx, p, size);
 	if (!p)
-		fz_throw(ctx, FZ_ERROR_MEMORY, "realloc (%zu bytes) failed", size);
+	{
+		errno = ENOMEM;
+		fz_throw(ctx, FZ_ERROR_SYSTEM, "realloc (%zu bytes) failed", size);
+	}
 	return p;
 }
 
@@ -165,6 +175,42 @@ fz_free(fz_context *ctx, void *p)
 	}
 }
 
+/* align is assumed to be a power of 2. */
+void *fz_malloc_aligned(fz_context *ctx, size_t size, int align)
+{
+	uint8_t *block;
+	uint8_t *aligned;
+
+	if (size == 0)
+		return NULL;
+
+	if (align >= 256)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "Alignment too large");
+	if ((align & (align-1)) != 0)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "Alignment must be a power of 2");
+
+	block = fz_malloc(ctx, size + align);
+
+	aligned = (void *)((intptr_t)(block + align-1) & ~(align-1));
+	if (aligned == block)
+		aligned = block + align;
+	memset(block, aligned-block, aligned-block);
+
+	return aligned;
+}
+
+void fz_free_aligned(fz_context *ctx, void *ptr)
+{
+	uint8_t *block = ptr;
+
+	if (ptr == NULL)
+		return;
+
+	block -= block[-1];
+
+	fz_free(ctx, block);
+}
+
 char *
 fz_strdup(fz_context *ctx, const char *s)
 {
@@ -173,6 +219,29 @@ fz_strdup(fz_context *ctx, const char *s)
 	memcpy(ns, s, len);
 	return ns;
 }
+
+fz_string *
+fz_new_string(fz_context *ctx, const char *s)
+{
+	fz_string *str = fz_malloc(ctx, sizeof(int)+strlen(s)+1);
+
+	str->refs = 1;
+	strcpy(str->str, s);
+
+	return str;
+}
+
+fz_string *fz_keep_string(fz_context *ctx, fz_string *str)
+{
+	return fz_keep_imp(ctx, str, &str->refs);
+}
+
+void fz_drop_string(fz_context *ctx, fz_string *str)
+{
+	if (fz_drop_imp(ctx, str, &str->refs))
+		fz_free(ctx, str);
+}
+
 
 static void *
 fz_malloc_default(void *opaque, size_t size)

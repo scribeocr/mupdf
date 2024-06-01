@@ -203,7 +203,7 @@
 
 .. method:: loadPage(number)
 
-    Returns a `Page`_ (or `PDFPage`_) object for the given page number. Page number zero (0) is the first page in the document.
+    Returns a :ref:`Page<mutool_run_js_api_page>` (or :ref:`PDFPage<mutool_run_js_api_pdf_page>`) object for the given page number. Page number zero (0) is the first page in the document.
 
     :return: `Page` or `PDFPage`.
 
@@ -230,8 +230,6 @@
 .. _mutool_run_js_api_document_outlineIterator:
 
 .. method:: outlineIterator()
-
-    |mutool_tag|
 
     Returns an :ref:`OutlineIterator<mutool_object_outline_iterator>` for the document outline.
 

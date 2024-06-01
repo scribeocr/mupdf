@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -75,7 +75,7 @@ svg_load_page(fz_context *ctx, fz_document *doc_, int chapter, int number)
 	svg_page *page;
 
 	if (number != 0)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "cannot find page %d", number);
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "cannot find page %d", number);
 
 	page = fz_new_derived_page(ctx, svg_page, doc_);
 	page->super.bound_page = svg_bound_page;
@@ -163,12 +163,11 @@ svg_open_document_with_buffer(fz_context *ctx, fz_buffer *buf, const char *base_
 }
 
 static fz_document *
-svg_open_document_with_stream(fz_context *ctx, fz_stream *file)
+svg_open_document(fz_context *ctx, fz_stream *file, fz_stream *accel, fz_archive *zip)
 {
-	fz_buffer *buf;
+	fz_buffer *buf = fz_read_all(ctx, file, 0);
 	fz_document *doc = NULL;
 
-	buf = fz_read_all(ctx, file, 0);
 	fz_try(ctx)
 		doc = svg_open_document_with_buffer(ctx, buf, NULL, NULL);
 	fz_always(ctx)
@@ -268,7 +267,7 @@ static const char *svg_mimetypes[] =
 };
 
 static int
-svg_recognize_doc_content(fz_context *ctx, fz_stream *stm)
+svg_recognize_doc_content(fz_context *ctx, fz_stream *stm, fz_archive *dir)
 {
 	// A standalone SVG document is an XML document with an <svg> root element.
 	//
@@ -281,6 +280,9 @@ svg_recognize_doc_content(fz_context *ctx, fz_stream *stm)
 	// Return failure on anything unexpected, or if the first element is not SVG.
 
 	int c;
+
+	if (stm == NULL)
+		return 0;
 
 parse_text:
 	// Skip whitespace until "<"
@@ -319,11 +321,8 @@ parse_comment:
 fz_document_handler svg_document_handler =
 {
 	NULL,
-	NULL,
-	svg_open_document_with_stream,
+	svg_open_document,
 	svg_extensions,
 	svg_mimetypes,
-	NULL,
-	NULL,
 	svg_recognize_doc_content
 };

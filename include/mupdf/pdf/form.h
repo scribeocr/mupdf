@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -207,7 +207,8 @@ typedef enum
 	PDF_SIGNATURE_ERROR_SELF_SIGNED,
 	PDF_SIGNATURE_ERROR_SELF_SIGNED_IN_CHAIN,
 	PDF_SIGNATURE_ERROR_NOT_TRUSTED,
-	PDF_SIGNATURE_ERROR_UNKNOWN
+	PDF_SIGNATURE_ERROR_NOT_SIGNED,
+	PDF_SIGNATURE_ERROR_UNKNOWN,
 } pdf_signature_error;
 
 /* Increment the reference count for a signer object */
@@ -370,5 +371,11 @@ void pdf_annot_event_page_open(fz_context *ctx, pdf_annot *annot);
 void pdf_annot_event_page_close(fz_context *ctx, pdf_annot *annot);
 void pdf_annot_event_page_visible(fz_context *ctx, pdf_annot *annot);
 void pdf_annot_event_page_invisible(fz_context *ctx, pdf_annot *annot);
+
+/*
+ * Bake appearances of annotations and/or widgets into static page content,
+ * and remove the corresponding interactive PDF objects.
+ */
+void pdf_bake_document(fz_context *ctx, pdf_document *doc, int bake_annots, int bake_widgets);
 
 #endif

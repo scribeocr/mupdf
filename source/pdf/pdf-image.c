@@ -92,17 +92,17 @@ pdf_load_image_imp(fz_context *ctx, pdf_document *doc, pdf_obj *rdb, pdf_obj *di
 		bpc = 1;
 
 	if (w <= 0)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "image width is zero (or less)");
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "image width is zero (or less)");
 	if (h <= 0)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "image height is zero (or less)");
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "image height is zero (or less)");
 	if (bpc <= 0)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "image depth is zero (or less)");
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "image depth is zero (or less)");
 	if (bpc > 16)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "image depth is too large: %d", bpc);
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "image depth is too large: %d", bpc);
 	if (SIZE_MAX / w < (size_t)(bpc+7)/8)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "image is too large");
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "image is too large");
 	if (SIZE_MAX / h < w * (size_t)((bpc+7)/8))
-		fz_throw(ctx, FZ_ERROR_GENERIC, "image is too large");
+		fz_throw(ctx, FZ_ERROR_SYNTAX, "image is too large");
 
 	fz_var(mask);
 	fz_var(image);
@@ -132,7 +132,7 @@ pdf_load_image_imp(fz_context *ctx, pdf_document *doc, pdf_obj *rdb, pdf_obj *di
 		}
 
 		if (SIZE_MAX / n < h * ((size_t)w) * ((bpc+7)/8))
-			fz_throw(ctx, FZ_ERROR_GENERIC, "image is too large");
+			fz_throw(ctx, FZ_ERROR_SYNTAX, "image is too large");
 
 		obj = pdf_dict_geta(ctx, dict, PDF_NAME(Decode), PDF_NAME(D));
 		if (obj)
@@ -306,7 +306,8 @@ pdf_load_jpx(fz_context *ctx, pdf_document *doc, pdf_obj *dict, int forcemask)
 	}
 	fz_catch(ctx)
 	{
-		fz_morph_error(ctx, FZ_ERROR_GENERIC, FZ_ERROR_MINOR);
+		fz_morph_error(ctx, FZ_ERROR_FORMAT, FZ_ERROR_SYNTAX);
+		fz_morph_error(ctx, FZ_ERROR_LIBRARY, FZ_ERROR_SYNTAX);
 		fz_rethrow(ctx);
 	}
 
@@ -401,7 +402,7 @@ pdf_copy_jbig2_segments(fz_context *ctx, fz_buffer *output, const unsigned char 
 	{
 		n = pdf_parse_jbig2_segment_header(ctx, data, end, &info);
 		if (n == 0)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "truncated jbig2 segment header");
+			fz_throw(ctx, FZ_ERROR_FORMAT, "truncated jbig2 segment header");
 
 		/* omit end of page, end of file, and segments for other pages */
 		type = (info.flags & 63);
@@ -415,7 +416,7 @@ pdf_copy_jbig2_segments(fz_context *ctx, fz_buffer *output, const unsigned char 
 			fz_append_data(ctx, output, data, n);
 			data += n;
 			if (data + info.length > end)
-				fz_throw(ctx, FZ_ERROR_GENERIC, "truncated jbig2 segment data");
+				fz_throw(ctx, FZ_ERROR_FORMAT, "truncated jbig2 segment data");
 			fz_append_data(ctx, output, data, info.length);
 			data += info.length;
 		}
@@ -437,13 +438,13 @@ pdf_copy_jbig2_random_segments(fz_context *ctx, fz_buffer *output, const unsigne
 	{
 		n = pdf_parse_jbig2_segment_header(ctx, data, end, &info);
 		if (n == 0)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "truncated jbig2 segment header");
+			fz_throw(ctx, FZ_ERROR_FORMAT, "truncated jbig2 segment header");
 		data += n;
 		if ((info.flags & 63) == 51)
 			break;
 	}
 	if (data >= end)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "truncated jbig2 segment header");
+		fz_throw(ctx, FZ_ERROR_FORMAT, "truncated jbig2 segment header");
 
 	/* Copy segment headers and segment data */
 	header_end = data;
@@ -451,7 +452,7 @@ pdf_copy_jbig2_random_segments(fz_context *ctx, fz_buffer *output, const unsigne
 	{
 		n = pdf_parse_jbig2_segment_header(ctx, header, header_end, &info);
 		if (n == 0)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "truncated jbig2 segment header");
+			fz_throw(ctx, FZ_ERROR_FORMAT, "truncated jbig2 segment header");
 
 		/* omit end of page, end of file, and segments for other pages */
 		type = (info.flags & 63);
@@ -465,7 +466,7 @@ pdf_copy_jbig2_random_segments(fz_context *ctx, fz_buffer *output, const unsigne
 			fz_append_data(ctx, output, header, n);
 			header += n;
 			if (data + info.length > end)
-				fz_throw(ctx, FZ_ERROR_GENERIC, "truncated jbig2 segment data");
+				fz_throw(ctx, FZ_ERROR_FORMAT, "truncated jbig2 segment data");
 			fz_append_data(ctx, output, data, info.length);
 			data += info.length;
 		}
@@ -804,7 +805,7 @@ unknown_compression:
 						break;
 					default:
 						// TODO: convert to RGB!
-						fz_throw(ctx, FZ_ERROR_GENERIC, "only indexed Gray, RGB, and CMYK colorspaces supported");
+						fz_throw(ctx, FZ_ERROR_ARGUMENT, "only indexed Gray, RGB, and CMYK colorspaces supported");
 						break;
 					}
 
@@ -827,7 +828,7 @@ unknown_compression:
 				break;
 			default:
 				// TODO: convert to RGB!
-				fz_throw(ctx, FZ_ERROR_GENERIC, "only Gray, RGB, and CMYK colorspaces supported");
+				fz_throw(ctx, FZ_ERROR_ARGUMENT, "only Gray, RGB, and CMYK colorspaces supported");
 				break;
 			}
 		}

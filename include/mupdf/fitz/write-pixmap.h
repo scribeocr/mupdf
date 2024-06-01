@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -178,6 +178,10 @@ typedef struct
 	char language[256];
 	char datadir[1024];
 
+	int skew_correct; /* 0 = no skew correction. 1 = automatic. 2 = use specified angle. */
+	float skew_angle; /* Only used if skew == 2 */
+	int skew_border; /* 0 = increase size so no content is lost. 1 = maintain size. 2 = decrease size so no new pixels are visible. */
+
 	/* Updated as we move through the job */
 	int page_count;
 } fz_pdfocr_options;
@@ -224,6 +228,11 @@ void fz_save_pixmap_as_pdfocr(fz_context *ctx, fz_pixmap *pixmap, char *filename
 	Save a (Greyscale or RGB) pixmap as a png.
 */
 void fz_save_pixmap_as_png(fz_context *ctx, fz_pixmap *pixmap, const char *filename);
+
+/**
+	Write a pixmap as a JPEG.
+*/
+void fz_write_pixmap_as_jpeg(fz_context *ctx, fz_output *out, fz_pixmap *pix, int quality, int invert_cmyk);
 
 /**
 	Save a pixmap as a JPEG.
