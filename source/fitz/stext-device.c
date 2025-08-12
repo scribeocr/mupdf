@@ -119,6 +119,8 @@ typedef struct
 	int new_obj;
 	int lastchar;
 	float lastsize;
+	// This is updated at a different point compared to last.font.name
+	char *lastfontname;
 	int lastbidi;
 	int flags;
 	int color;
@@ -462,6 +464,14 @@ vec_dot(const fz_point *a, const fz_point *b)
 	return a->x * b->x + a->y * b->y;
 }
 
+static const char *
+font_full_name(fz_context *ctx, fz_font *font)
+{
+	const char *name = fz_font_name(ctx, font);
+	const char *s = strchr(name, '+');
+	return s ? s + 1 : name;
+}
+
 static int may_add_space(int lastchar)
 {
 	/* Basic latin, greek, cyrillic, hebrew, arabic,
@@ -470,7 +480,16 @@ static int may_add_space(int lastchar)
 	 * and currency symbols.
 	 * Additionally additions: geometric shapes.
 	 */
-	return (lastchar != ' ' && (lastchar < 0x700 || (lastchar >= 0x2000 && lastchar <= 0x20CF) || (lastchar >= 0x25A0 && lastchar <= 0x25CF)));
+	return (lastchar != ' ' && (
+			lastchar < 0x700 || 
+			(lastchar >= 0x2000 && lastchar <= 0x20CF) || 
+			// Geometric Shapes
+			(lastchar >= 0x25A0 && lastchar <= 0x25FF) ||
+			// Miscellaneous Symbols
+			(lastchar >= 0x2600 && lastchar <= 0x26FF) ||
+			// Dingbats
+			(lastchar >= 0x2700 && lastchar <= 0x27BF)
+		));
 }
 
 static void
@@ -648,7 +667,29 @@ fz_add_stext_char_imp(fz_context *ctx, fz_stext_device *dev, fz_font *font, int 
 			/* LTR or neutral character */
 			else
 			{
-				if (spacing > -0.5 && spacing < SPACE_DIST)
+
+				// Changes to or from a symbol font cause a change in word.
+				// Switching between letters and symbols almost always *should* cause a space,
+				// however it sometimes does not using other heuristics,
+				// as symbols often have advances much larger than the symbol itself,
+				// so the `spacing` metric can be much smaller than the visual space would suggest.
+				int font_symbol = !strncasecmp(font_full_name(ctx, font), "Symbol", 6) || 
+					!strncasecmp(font_full_name(ctx, font), "Webdings", 8) || 
+					!strncasecmp(font_full_name(ctx, font), "Wingdings", 9);
+
+				int font_symbol_last = dev->lastfontname && 
+					dev->lastchar != ' ' && 
+					(!strncasecmp(dev->lastfontname, "Symbol", 6) || 
+					!strncasecmp(dev->lastfontname, "Webdings", 8) || 
+					!strncasecmp(dev->lastfontname, "Wingdings", 9));
+
+				/* Motion is forward in line and large enough to warrant us adding a space. */
+				if (font_symbol != font_symbol_last && spacing < SPACE_MAX_DIST)
+				{
+					add_space = 1;
+					new_line = 0;
+				}
+				else if (spacing > -0.5 && spacing < SPACE_DIST)
 				{
 					/* Motion is in line and small enough to ignore. */
 					new_line = 0;
@@ -711,6 +752,8 @@ fz_add_stext_char_imp(fz_context *ctx, fz_stext_device *dev, fz_font *font, int 
 		cur_line = add_line_to_block(ctx, page, cur_block, &ndir, wmode, bidi);
 		dev->start = p;
 	}
+
+	dev->lastfontname = font_full_name(ctx, font);
 
 	/* Add synthetic space */
 	if (add_space && !(dev->flags & FZ_STEXT_INHIBIT_SPACES))

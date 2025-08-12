@@ -20,7 +20,7 @@
 // Artifex Software, Inc., 1305 Grant Avenue - Suite 200, Novato,
 // CA 94945, U.S.A., +1(415)492-9861, for further information.
 
-const parentPort = typeof process === 'undefined' ? globalThis : (await import('worker_threads')).parentPort;
+const parentPort = typeof process === 'undefined' ? globalThis : (await import('node:worker_threads')).parentPort;
 if (!parentPort) throw new Error('This file must be run in a worker');
 
 // Copied from https://gist.github.com/jonleighton/958841
@@ -33,9 +33,9 @@ function arrayBufferToBase64(arrayBuffer) {
   const byteRemainder = byteLength % 3;
   const mainLength = byteLength - byteRemainder;
 
-  let a; 
-  let b; 
-  let c; 
+  let a;
+  let b;
+  let c;
   let d;
   let chunk;
 
@@ -86,10 +86,10 @@ if (typeof process === 'object') {
   // @ts-ignore
   globalThis.self = globalThis;
   // @ts-ignore
-  const { createRequire } = await import('module');
+  const { createRequire } = await import('node:module');
   globalThis.require = createRequire(import.meta.url);
-  const { fileURLToPath } = await import('url');
-  const { dirname } = await import('path');
+  const { fileURLToPath } = await import('node:url');
+  const { dirname } = await import('node:path');
   globalThis.__dirname = dirname(fileURLToPath(import.meta.url));
 }
 
@@ -142,6 +142,11 @@ Module.onRuntimeInitialized = function () {
   ready = true;
 };
 
+// In certain environments, `onRuntimeInitialized` may be defined after it is called in the module code.
+if (Module.calledRun && !ready) {
+  Module.onRuntimeInitialized();
+}
+
 /**
  *
  * @param {number} doc - Ignored (included as boilerplate for consistency with other functions).
@@ -164,7 +169,7 @@ mupdf.save = function (doc, {
 
   FS.unlink('/download.pdf');
   return content;
-}
+};
 
 /**
  *
@@ -299,7 +304,6 @@ mupdf.convertImageAddPage = function (doc, {
 
   FS.unlink(`${String(i)}.png`);
 };
-
 
 mupdf.convertImageEnd = function () {
   wasm_convertImageEnd();
