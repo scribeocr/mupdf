@@ -595,6 +595,28 @@ filter_show_char(fz_context *ctx, pdf_sanitize_processor *p, int cid, int *unico
 	}
 	*unicode = ucsbuf[0];
 
+	if (p->global_options->skip_text_invis) {
+		dofill = dostroke = doclip = doinvisible = 0;
+
+		switch (gstate->pending.text.render)
+		{
+		case 0: dofill = 1; break;
+		case 1: dostroke = 1; break;
+		case 2: dofill = dostroke = 1; break;
+		case 3: doinvisible = 1; break;
+		case 4: dofill = doclip = 1; break;
+		case 5: dostroke = doclip = 1; break;
+		case 6: dofill = dostroke = doclip = 1; break;
+		case 7: doclip = 1; break;
+		}
+
+		if (p->super.hidden || doinvisible ||
+			((!dofill || gstate->pending.ca == 0.0f) &&
+			(!dostroke || gstate->pending.CA == 0.0f))) {
+			return 1;
+		}
+	}
+
 	if (p->options->text_filter || p->options->culler)
 	{
 		fz_matrix ctm;
@@ -617,26 +639,6 @@ filter_show_char(fz_context *ctx, pdf_sanitize_processor *p, int cid, int *unico
 			bbox.x1 = font_bbox.x1;
 			bbox.y0 = 0;
 			bbox.y1 = fz_advance_glyph(ctx, fontdesc->font, p->tos.gid, 1);
-		}
-
-		if (p->global_options->skip_text_invis) {
-			dofill = dostroke = doclip = doinvisible = 0;
-
-			switch (p->tos.text_mode)
-			{
-			case 0: dofill = 1; break;
-			case 1: dostroke = 1; break;
-			case 2: dofill = dostroke = 1; break;
-			case 3: doinvisible = 1; break;
-			case 4: dofill = doclip = 1; break;
-			case 5: dostroke = doclip = 1; break;
-			case 6: dofill = dostroke = doclip = 1; break;
-			case 7: doclip = 1; break;
-			}
-
-			if (p->super.hidden || (!dofill || gstate->pending.ca == 0.0f) && (!dostroke || gstate->pending.CA == 0.0f)) {
-				return 1;
-			}
 		}
 
 		if (p->options->text_filter)
@@ -2988,6 +2990,8 @@ pdf_new_sanitize_filter(
 		proc->gstate->pending.text.size = -1;
 		proc->gstate->pending.stroke.linewidth = 1;
 		proc->gstate->pending.stroke.miterlimit = 10;
+		proc->gstate->pending.ca = 1;
+		proc->gstate->pending.CA = 1;
 		proc->gstate->sent.text.scale = 1;
 		proc->gstate->sent.text.size = -1;
 		proc->gstate->sent.stroke.linewidth = 1;
