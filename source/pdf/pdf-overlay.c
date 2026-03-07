@@ -47,8 +47,8 @@ static void pdf_overlay_page(fz_context *ctx, pdf_document *doc_base, pdf_page *
 
 	fz_try(ctx)
 	{
-		cropbox_base = fz_bound_page(ctx, page_base);
-		cropbox_text = fz_bound_page(ctx, page_text);
+		cropbox_base = fz_bound_page(ctx, (fz_page *)page_base);
+		cropbox_text = fz_bound_page(ctx, (fz_page *)page_text);
 
 		// These are calculated here because the `fz_bound_page` functions do not appear to calculate the same values (unclear why).
 		// Do not replace this with the `fz_bound_page` functions without further investigation.
@@ -162,6 +162,54 @@ static void pdf_overlay_page(fz_context *ctx, pdf_document *doc_base, pdf_page *
 				key = pdf_dict_get_key(ctx, res_text_gstate, i);
 				font_graft = pdf_graft_mapped_object(ctx, graft_map, font);
 				pdf_dict_put_drop(ctx, res_base_gstate, key, font_graft);
+			}
+		}
+
+		// Copy annotations from text page to base page
+		{
+			pdf_obj *annots_text = pdf_dict_get(ctx, page_text->obj, PDF_NAME(Annots));
+			int annot_count = pdf_array_len(ctx, annots_text);
+			if (annot_count > 0)
+			{
+				pdf_obj *annots_base = pdf_dict_get(ctx, page_base->obj, PDF_NAME(Annots));
+				if (!annots_base)
+					annots_base = pdf_dict_put_array(ctx, page_base->obj, PDF_NAME(Annots), annot_count);
+
+				for (int ai = 0; ai < annot_count; ai++)
+				{
+					pdf_obj *annot_obj = pdf_array_get(ctx, annots_text, ai);
+					pdf_obj *annot_graft = pdf_graft_mapped_object(ctx, graft_map, annot_obj);
+
+					fz_rect annot_rect = pdf_dict_get_rect(ctx, annot_graft, PDF_NAME(Rect));
+					annot_rect = fz_transform_rect(annot_rect, mat);
+					pdf_dict_put_rect(ctx, annot_graft, PDF_NAME(Rect), annot_rect);
+
+					pdf_obj *qp_old = pdf_dict_get(ctx, annot_graft, PDF_NAME(QuadPoints));
+					int qp_len = pdf_array_len(ctx, qp_old);
+					if (qp_len > 0)
+					{
+						pdf_obj *qp_new = pdf_new_array(ctx, doc_base, qp_len);
+						for (int qi = 0; qi < qp_len; qi += 8)
+						{
+							fz_quad q = pdf_to_quad(ctx, qp_old, qi);
+							q = fz_transform_quad(q, mat);
+							pdf_array_push_real(ctx, qp_new, q.ul.x);
+							pdf_array_push_real(ctx, qp_new, q.ul.y);
+							pdf_array_push_real(ctx, qp_new, q.ur.x);
+							pdf_array_push_real(ctx, qp_new, q.ur.y);
+							pdf_array_push_real(ctx, qp_new, q.ll.x);
+							pdf_array_push_real(ctx, qp_new, q.ll.y);
+							pdf_array_push_real(ctx, qp_new, q.lr.x);
+							pdf_array_push_real(ctx, qp_new, q.lr.y);
+						}
+						pdf_dict_put_drop(ctx, annot_graft, PDF_NAME(QuadPoints), qp_new);
+					}
+
+					// Remove appearance stream so viewer regenerates it
+					pdf_dict_del(ctx, annot_graft, PDF_NAME(AP));
+
+					pdf_array_push_drop(ctx, annots_base, annot_graft);
+				}
 			}
 		}
 	}

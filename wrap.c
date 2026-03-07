@@ -92,10 +92,10 @@ void writeDocument()
 	char *password = "";
 	char *argv = "";	
 
-	pdf_write_options opts = pdf_default_write_options;
-	opts.do_encrypt = PDF_ENCRYPT_NONE;
+	pdf_clean_options opts = { pdf_default_write_options };
+	opts.write.do_encrypt = PDF_ENCRYPT_NONE;
 
-	pdf_clean_file(ctx, infile, outfile, password, &opts, 0, argv);
+	pdf_clean_file(ctx, infile, outfile, password, &opts, 0, &argv);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -1106,14 +1106,15 @@ int extractAllFonts(fz_document *doc)
 	int fontCount = 0;
 	int o;
 	pdf_obj *ref;
+	pdf_document *pdoc = (pdf_document *)doc;
 	fz_var(doc);
 
 	fz_try(ctx)
 	{
-		int len = pdf_count_objects(ctx, doc);
+		int len = pdf_count_objects(ctx, pdoc);
 		for (o = 1; o < len; o++)
 		{
-			ref = pdf_new_indirect(ctx, doc, o, 0);
+			ref = pdf_new_indirect(ctx, pdoc, o, 0);
 			if (supportedfont(ref)) {
 				fontCount++;
 				savefont(ref, fontCount);

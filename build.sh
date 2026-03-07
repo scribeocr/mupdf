@@ -45,7 +45,7 @@ make -j4 -C generate
 echo Building library:
 make -j4 -C . \
 	OS=wasm2 build=release \
-	XCFLAGS="-DTOFU -DTOFU_CJK -DFZ_ENABLE_SVG=0 -DFZ_ENABLE_HTML=0 -DFZ_ENABLE_EPUB=0 -DFZ_ENABLE_JS=0 -DFZ_ENABLE_ICC=0 -DFZ_ENABLE_XPS=0 -DFZ_ENABLE_CBZ=0 -DFZ_ENABLE_IMG=0 -DFZ_ENABLE_OCR_OUTPUT=0 -DFZ_ENABLE_DOCX_OUTPUT=0 -DFZ_ENABLE_ODT_OUTPUT=0" \
+	XCFLAGS="-DTOFU -DTOFU_CJK -DFZ_ENABLE_SVG=0 -DFZ_ENABLE_HTML=0 -DFZ_ENABLE_EPUB=0 -DFZ_ENABLE_JS=0 -DFZ_ENABLE_ICC=0 -DFZ_ENABLE_XPS=0 -DFZ_ENABLE_CBZ=0 -DFZ_ENABLE_IMG=0 -DFZ_ENABLE_OCR_OUTPUT=0 -DFZ_ENABLE_DOCX_OUTPUT=0 -DFZ_ENABLE_ODT_OUTPUT=0 -Wno-error=incompatible-pointer-types" \
 	libs
 
 ## TODO: I believe the following is no longer true as a bug was fixed.  We can consider switching to "Os" optimization.
@@ -63,7 +63,7 @@ emcc -Wall -O3 -g1 -o libmupdf.js \
 	-s ABORTING_MALLOC=0 \
 	-s ALLOW_MEMORY_GROWTH=1 \
 	-s MAXIMUM_MEMORY=4GB \
-	-s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","getValue","UTF8ToString"]' \
+	-s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","getValue","UTF8ToString","HEAPU8"]' \
 	-s EXPORTED_FUNCTIONS='["_malloc","_free"]' \
 	-s FORCE_FILESYSTEM \
 	-I ./include \
