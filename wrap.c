@@ -449,12 +449,15 @@ PageTextResults* pageText(fz_document *doc, int pagenum, float dpi, int format, 
 static fz_buffer *lastDrawBuffer = NULL;
 
 EMSCRIPTEN_KEEPALIVE
-void doDrawPageAsPNG(fz_document *doc, int number, float dpi, int skip_text)
+void doDrawPageAsPNG(fz_document *doc, int number, float dpi, int skip_text, int skip_annots)
 {
 	float zoom = dpi / 72;
+	fz_matrix ctm = fz_scale(zoom, zoom);
 	fz_pixmap *pix = NULL;
+	fz_device *dev = NULL;
 
 	fz_var(pix);
+	fz_var(dev);
 
 	if (lastDrawBuffer)
 		fz_drop_buffer(ctx, lastDrawBuffer);
@@ -463,22 +466,45 @@ void doDrawPageAsPNG(fz_document *doc, int number, float dpi, int skip_text)
 	fz_try(ctx)
 	{
 		loadPage(doc, number);
-		pix = fz_new_pixmap_from_page(ctx, lastPage, fz_scale(zoom, zoom), fz_device_rgb(ctx), 0, skip_text);
+
+		fz_rect rect = fz_bound_page(ctx, lastPage);
+		rect = fz_transform_rect(rect, ctm);
+		fz_irect bbox = fz_round_rect(rect);
+
+		pix = fz_new_pixmap_with_bbox(ctx, fz_device_rgb(ctx), bbox, NULL, 0);
+		fz_clear_pixmap_with_value(ctx, pix, 0xFF);
+
+		dev = fz_new_draw_device(ctx, ctm, pix);
+		fz_cookie cookie = {0};
+		cookie.skip_text = skip_text;
+
+		fz_run_page_contents(ctx, lastPage, dev, fz_identity, &cookie);
+		if (!skip_annots)
+			fz_run_page_annots(ctx, lastPage, dev, fz_identity, &cookie);
+		fz_run_page_widgets(ctx, lastPage, dev, fz_identity, &cookie);
+		fz_close_device(ctx, dev);
+
 		lastDrawBuffer = fz_new_buffer_from_pixmap_as_png(ctx, pix, fz_default_color_params);
 	}
 	fz_always(ctx)
+	{
+		fz_drop_device(ctx, dev);
 		fz_drop_pixmap(ctx, pix);
+	}
 	fz_catch(ctx)
 		wasm_rethrow(ctx);
 }
 
 EMSCRIPTEN_KEEPALIVE
-void doDrawPageAsPNGGray(fz_document *doc, int number, float dpi, int skip_text)
+void doDrawPageAsPNGGray(fz_document *doc, int number, float dpi, int skip_text, int skip_annots)
 {
 	float zoom = dpi / 72;
+	fz_matrix ctm = fz_scale(zoom, zoom);
 	fz_pixmap *pix = NULL;
+	fz_device *dev = NULL;
 
 	fz_var(pix);
+	fz_var(dev);
 
 	if (lastDrawBuffer)
 		fz_drop_buffer(ctx, lastDrawBuffer);
@@ -487,11 +513,31 @@ void doDrawPageAsPNGGray(fz_document *doc, int number, float dpi, int skip_text)
 	fz_try(ctx)
 	{
 		loadPage(doc, number);
-		pix = fz_new_pixmap_from_page(ctx, lastPage, fz_scale(zoom, zoom), fz_device_gray(ctx), 0, skip_text);
+
+		fz_rect rect = fz_bound_page(ctx, lastPage);
+		rect = fz_transform_rect(rect, ctm);
+		fz_irect bbox = fz_round_rect(rect);
+
+		pix = fz_new_pixmap_with_bbox(ctx, fz_device_gray(ctx), bbox, NULL, 0);
+		fz_clear_pixmap_with_value(ctx, pix, 0xFF);
+
+		dev = fz_new_draw_device(ctx, ctm, pix);
+		fz_cookie cookie = {0};
+		cookie.skip_text = skip_text;
+
+		fz_run_page_contents(ctx, lastPage, dev, fz_identity, &cookie);
+		if (!skip_annots)
+			fz_run_page_annots(ctx, lastPage, dev, fz_identity, &cookie);
+		fz_run_page_widgets(ctx, lastPage, dev, fz_identity, &cookie);
+		fz_close_device(ctx, dev);
+
 		lastDrawBuffer = fz_new_buffer_from_pixmap_as_png(ctx, pix, fz_default_color_params);
 	}
 	fz_always(ctx)
+	{
+		fz_drop_device(ctx, dev);
 		fz_drop_pixmap(ctx, pix);
+	}
 	fz_catch(ctx)
 		wasm_rethrow(ctx);
 }
@@ -888,6 +934,98 @@ char *pageLinks(fz_document *doc, int number, float dpi)
 	{
 		fz_drop_buffer(ctx, buf);
 		fz_drop_link(ctx, links);
+	}
+	fz_catch(ctx)
+	{
+		wasm_rethrow(ctx);
+	}
+
+	return (char*)data;
+}
+
+EMSCRIPTEN_KEEPALIVE
+char *pageAnnotations(fz_document *doc, int number, float dpi)
+{
+	static unsigned char *data = NULL;
+	fz_buffer *buf = NULL;
+
+	fz_var(buf);
+
+	fz_free(ctx, data);
+	data = NULL;
+
+	fz_try(ctx)
+	{
+		loadPage(doc, number);
+
+		pdf_page *ppage = (pdf_page *)lastPage;
+		pdf_annot *annot;
+		float zoom = dpi / 72;
+		fz_matrix scale = fz_scale(zoom, zoom);
+
+		buf = fz_new_buffer(ctx, 0);
+		fz_append_string(ctx, buf, "[");
+
+		int first = 1;
+		for (annot = pdf_first_annot(ctx, ppage); annot; annot = pdf_next_annot(ctx, annot))
+		{
+			if (pdf_annot_type(ctx, annot) != PDF_ANNOT_HIGHLIGHT)
+				continue;
+
+			if (!first) fz_append_string(ctx, buf, ",");
+			first = 0;
+
+			fz_rect rect = pdf_annot_rect(ctx, annot);
+			rect = fz_transform_rect(rect, scale);
+
+			int n_color = 0;
+			float color[4] = {0};
+			pdf_annot_color(ctx, annot, &n_color, color);
+
+			float opacity = pdf_annot_opacity(ctx, annot);
+			const char *contents = pdf_annot_contents(ctx, annot);
+
+			fz_append_string(ctx, buf, "{");
+			fz_append_printf(ctx, buf, "%q:{%q:%f,%q:%f,%q:%f,%q:%f},",
+				"rect", "left", rect.x0, "top", rect.y0, "right", rect.x1, "bottom", rect.y1);
+
+			if (n_color >= 3)
+				fz_append_printf(ctx, buf, "%q:[%f,%f,%f],", "color", color[0], color[1], color[2]);
+			else if (n_color == 1)
+				fz_append_printf(ctx, buf, "%q:[%f,%f,%f],", "color", color[0], color[0], color[0]);
+
+			fz_append_printf(ctx, buf, "%q:%f", "opacity", opacity);
+
+			if (contents && contents[0])
+				fz_append_printf(ctx, buf, ",%q:%q", "comment", contents);
+
+			int qp_count = pdf_annot_quad_point_count(ctx, annot);
+			if (qp_count > 0)
+			{
+				fz_append_printf(ctx, buf, ",%q:[", "quads");
+				for (int qi = 0; qi < qp_count; qi++)
+				{
+					fz_quad q = pdf_annot_quad_point(ctx, annot, qi);
+					q = fz_transform_quad(q, scale);
+					fz_rect qr = fz_rect_from_quad(q);
+					if (qi > 0) fz_append_string(ctx, buf, ",");
+					fz_append_printf(ctx, buf, "{%q:%f,%q:%f,%q:%f,%q:%f}",
+						"left", qr.x0, "top", qr.y0, "right", qr.x1, "bottom", qr.y1);
+				}
+				fz_append_string(ctx, buf, "]");
+			}
+
+			fz_append_string(ctx, buf, "}");
+		}
+
+		fz_append_string(ctx, buf, "]");
+		fz_terminate_buffer(ctx, buf);
+
+		fz_buffer_extract(ctx, buf, &data);
+	}
+	fz_always(ctx)
+	{
+		fz_drop_buffer(ctx, buf);
 	}
 	fz_catch(ctx)
 	{
