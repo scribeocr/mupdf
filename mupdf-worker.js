@@ -116,8 +116,9 @@ Module.onRuntimeInitialized = function () {
   mupdf.pageWidth = Module.cwrap('pageWidth', 'number', ['number', 'number', 'number']);
   mupdf.pageHeight = Module.cwrap('pageHeight', 'number', ['number', 'number', 'number']);
   mupdf.pageLinksJSON = Module.cwrap('pageLinks', 'string', ['number', 'number', 'number']);
-  mupdf.doDrawPageAsPNG = Module.cwrap('doDrawPageAsPNG', 'null', ['number', 'number', 'number', 'number']);
-  mupdf.doDrawPageAsPNGGray = Module.cwrap('doDrawPageAsPNGGray', 'null', ['number', 'number', 'number', 'number']);
+  mupdf.pageAnnotationsJSON = Module.cwrap('pageAnnotations', 'string', ['number', 'number', 'number']);
+  mupdf.doDrawPageAsPNG = Module.cwrap('doDrawPageAsPNG', 'null', ['number', 'number', 'number', 'number', 'number']);
+  mupdf.doDrawPageAsPNGGray = Module.cwrap('doDrawPageAsPNGGray', 'null', ['number', 'number', 'number', 'number', 'number']);
   wasm_convertImageStart = Module.cwrap('convertImageStart', 'null', ['number']);
   wasm_convertImageAddPage = Module.cwrap('convertImageAddPage', 'null', ['number', 'number', 'number', 'number', 'number']);
   wasm_convertImageEnd = Module.cwrap('convertImageEnd', 'null', ['number']);
@@ -128,7 +129,63 @@ Module.onRuntimeInitialized = function () {
   wasm_extractAllFonts = Module.cwrap('extractAllFonts', 'number', ['number']);
   wasm_pageText0 = Module.cwrap('pageText', 'PageTextResults', ['number', 'number', 'number', 'number', 'number', 'number', 'number']);
   mupdf.overlayDocuments = Module.cwrap('pdfOverlayDocuments', 'null', ['number', 'number']);
-  mupdf.subsetPages = Module.cwrap('pdfSubsetPages', 'null', ['number', 'number', 'number']);
+  const wasm_subsetPages = Module.cwrap('pdfSubsetPages', 'null', ['number', 'string']);
+
+  /**
+   * Subset pages in a PDF document.
+   * @param {number} doc - Document handle.
+   * @param {Object} args
+   * @param {Array<number>} [args.pageArr] - Array of 0-based page indices.
+   * @param {number} [args.minpage] - First page of a continuous range (used when pageArr is not provided).
+   * @param {number} [args.maxpage] - Last page of a continuous range, inclusive (used when pageArr is not provided).
+   */
+  mupdf.subsetPages = function (doc, { pageArr, minpage = 0, maxpage = 0 }) {
+    if (!pageArr) {
+      pageArr = [];
+      for (let i = minpage; i <= maxpage; i++) pageArr.push(i);
+    }
+    // Compress array into range string (e.g. [0,1,2,5,6] -> "0-2,5-6")
+    const parts = [];
+    let i = 0;
+    while (i < pageArr.length) {
+      const start = pageArr[i];
+      let end = start;
+      while (i + 1 < pageArr.length && pageArr[i + 1] === end + 1) {
+        end = pageArr[++i];
+      }
+      parts.push(start === end ? String(start) : `${start}-${end}`);
+      i++;
+    }
+    wasm_subsetPages(doc, parts.join(','));
+  };
+  const wasm_mergeFrom = Module.cwrap('pdfMergeFrom', 'null', ['number', 'number', 'string']);
+
+  /**
+   * Merge pages from a source document into a destination document.
+   * @param {number} dst - Destination document handle.
+   * @param {number} src - Source document handle.
+   * @param {Object} [args]
+   * @param {Array<number>} [args.pageArr] - Array of 0-based page indices from the source. If omitted, all pages are merged.
+   */
+  mupdf.mergeFrom = function (dst, src, { pageArr } = {}) {
+    let pagestr = '';
+    if (pageArr) {
+      const parts = [];
+      let i = 0;
+      while (i < pageArr.length) {
+        const start = pageArr[i];
+        let end = start;
+        while (i + 1 < pageArr.length && pageArr[i + 1] === end + 1) {
+          end = pageArr[++i];
+        }
+        parts.push(start === end ? String(start) : `${start}-${end}`);
+        i++;
+      }
+      pagestr = parts.join(',');
+    }
+    wasm_mergeFrom(dst, src, pagestr);
+  };
+
   mupdf.searchJSON = Module.cwrap('search', 'string', ['number', 'number', 'number', 'string']);
   mupdf.loadOutline = Module.cwrap('loadOutline', 'number', ['number']);
   mupdf.freeOutline = Module.cwrap('freeOutline', null, ['number']);
@@ -350,15 +407,16 @@ mupdf.openDocument = function (data, magic) {
  * @param {number} args.dpi
  * @param {boolean} [args.color=true]
  * @param {boolean} [args.skipText=false]
+ * @param {boolean} [args.skipAnnots=true]
  * @returns
  */
 mupdf.drawPageAsPNG = function (doc, {
-  page, dpi, color = true, skipText = false,
+  page, dpi, color = true, skipText = false, skipAnnots = true,
 }) {
   if (color) {
-    mupdf.doDrawPageAsPNG(doc, page, dpi, skipText);
+    mupdf.doDrawPageAsPNG(doc, page, dpi, skipText, skipAnnots);
   } else {
-    mupdf.doDrawPageAsPNGGray(doc, page, dpi, skipText);
+    mupdf.doDrawPageAsPNGGray(doc, page, dpi, skipText, skipAnnots);
   }
 
   const n = mupdf.getLastDrawSize();
@@ -407,6 +465,10 @@ mupdf.pageSizes = function (doc, dpi) {
 
 mupdf.pageLinks = function (doc, page, dpi) {
   return JSON.parse(mupdf.pageLinksJSON(doc, page, dpi));
+};
+
+mupdf.pageAnnotations = function (doc, { page, dpi = 72 }) {
+  return JSON.parse(mupdf.pageAnnotationsJSON(doc, page, dpi));
 };
 
 mupdf.search = function (doc, page, dpi, needle) {
