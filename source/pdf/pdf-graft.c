@@ -242,7 +242,8 @@ void pdf_graft_mapped_page(fz_context *ctx, pdf_graft_map *map, int page_to, pdf
 		PDF_NAME(TrimBox),
 		PDF_NAME(ArtBox),
 		PDF_NAME(Rotate),
-		PDF_NAME(UserUnit)
+		PDF_NAME(UserUnit),
+		PDF_NAME(Annots)
 	};
 
 	fz_var(ref);

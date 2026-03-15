@@ -767,36 +767,68 @@ void runPDF(fz_document *doc, int minpage, int maxpage, int pagewidth, int pageh
 }
 
 EMSCRIPTEN_KEEPALIVE
-void pdfSubsetPages(pdf_document *doc, int minpage, int maxpage) 
+void pdfSubsetPages(pdf_document *doc, const char *pagestr)
 {
 	int *pages = NULL;
-	int cap, len, page;
+	int len = 0, cap = 0;
+	const char *p = pagestr;
 
-	fz_var(doc);
-	fz_var(pages);
-
-	len = cap = 0;
-
-	int pagecount = pdf_count_pages(ctx, doc);
-
-	if (maxpage == -1 || maxpage >= pagecount) {
-		maxpage = pagecount-1;
+	while (*p) {
+		int start = (int)strtol(p, (char**)&p, 10);
+		int end = start;
+		if (*p == '-') {
+			p++;
+			end = (int)strtol(p, (char**)&p, 10);
+		}
+		int count = (start <= end) ? (end - start + 1) : (start - end + 1);
+		int step = (start <= end) ? 1 : -1;
+		if (len + count >= cap) {
+			int n = cap ? cap * 2 : 8;
+			while (len + count >= n)
+				n *= 2;
+			pages = fz_realloc_array(ctx, pages, n, int);
+			cap = n;
+		}
+		for (int i = start; i != end + step; i += step)
+			pages[len++] = i;
+		if (*p == ',') p++;
 	}
-
-	if (len + (maxpage - minpage + 1) >= cap)
-	{
-		int n = cap ? cap * 2 : 8;
-		while (len + (maxpage - minpage + 1) >= n) 
-			n *= 2;
-		pages = fz_realloc_array(ctx, pages, n, int);
-		cap = n;
-	}
-
-	for (page = minpage; page <= maxpage; ++page)
-		pages[len++] = page;
 
 	pdf_rearrange_pages(ctx, doc, len, pages);
+	fz_free(ctx, pages);
+}
 
+EMSCRIPTEN_KEEPALIVE
+void pdfMergeFrom(pdf_document *dst, pdf_document *src, const char *pagestr)
+{
+	int src_page_count = pdf_count_pages(ctx, src);
+	pdf_graft_map *graft_map = pdf_new_graft_map(ctx, dst);
+
+	fz_try(ctx)
+	{
+		if (pagestr && *pagestr) {
+			const char *p = pagestr;
+			while (*p) {
+				int start = (int)strtol(p, (char**)&p, 10);
+				int end = start;
+				if (*p == '-') {
+					p++;
+					end = (int)strtol(p, (char**)&p, 10);
+				}
+				int step = (start <= end) ? 1 : -1;
+				for (int i = start; i != end + step; i += step)
+					pdf_graft_mapped_page(ctx, graft_map, -1, src, i);
+				if (*p == ',') p++;
+			}
+		} else {
+			for (int i = 0; i < src_page_count; i++)
+				pdf_graft_mapped_page(ctx, graft_map, -1, src, i);
+		}
+	}
+	fz_always(ctx)
+		pdf_drop_graft_map(ctx, graft_map);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
 }
 
 EMSCRIPTEN_KEEPALIVE
